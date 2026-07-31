@@ -129,11 +129,18 @@ ok "5 个 hook 点注入完成"
 # ============================================================================
 step "5. smali a 重新打包成 dex"
 # ============================================================================
+# smali 2.5.2 的 mapApiToDexVersion 只到 API 35（dex 041）。
+# Android 16 (API 36) dex 格式与 15 相同（DEX 041），降级用 35 即可。
+SMALI_API=$API_LEVEL
+if [ "$SMALI_API" -ge 36 ]; then
+    info "API $SMALI_API >= 36，smali 2.5.2 不支持，降级用 API 35（dex 041，兼容 Android 15/16）"
+    SMALI_API=35
+fi
 for d in $DEX_TO_PATCH; do
     out_dir="$WORK/smali_${d%.dex}"
     out_dex="$PATCHED_OUT/$d"
-    info "smali a $out_dir -> $out_dex  (API $API_LEVEL)"
-    java -jar "$SMALI_JAR" a -a "$API_LEVEL" "$out_dir" -o "$out_dex" 2>"$WORK/smali_${d%.dex}.err" \
+    info "smali a $out_dir -> $out_dex  (API $SMALI_API)"
+    java -jar "$SMALI_JAR" a -a "$SMALI_API" "$out_dir" -o "$out_dex" 2>"$WORK/smali_${d%.dex}.err" \
         || die "smali 重新打包 $d 失败: $(head -5 "$WORK/smali_${d%.dex}.err")"
     # 校验 dex magic
     magic=$(head -c 8 "$out_dex" | od -An -tx1 | tr -d ' \n')
