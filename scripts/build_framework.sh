@@ -142,10 +142,10 @@ for d in $DEX_TO_PATCH; do
     info "smali a $out_dir -> $out_dex  (API $SMALI_API)"
     java -jar "$SMALI_JAR" a -a "$SMALI_API" "$out_dir" -o "$out_dex" 2>"$WORK/smali_${d%.dex}.err" \
         || die "smali 重新打包 $d 失败: $(head -5 "$WORK/smali_${d%.dex}.err")"
-    # 校验 dex magic
+    # 校验 dex magic（dex\n 后跟版本号 035/036/037/038/039/040/041 等）
     magic=$(head -c 8 "$out_dex" | od -An -tx1 | tr -d ' \n')
     case "$magic" in
-        6465780a3033*) ok "$d 重新打包成功 (magic=$magic, $(du -h "$out_dex" | cut -f1))";;
+        6465780a3033*|6465780a3034*|6465780a3035*) ok "$d 重新打包成功 (magic=$magic, $(du -h "$out_dex" | cut -f1))";;
         *) die "$d 重新打包后 magic 异常: $magic";;
     esac
 done
