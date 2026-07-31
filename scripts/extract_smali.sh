@@ -130,6 +130,43 @@ DEX_COUNT=$(echo "$DEX_LIST" | wc -l | tr -d ' ')
 ok "共 $DEX_COUNT 个 dex:"
 echo "$DEX_LIST" | sed 's/^/    - /'
 
+# ---- 文件头校验：dex magic = "dex\n035" / "dex\n036" / "dex\n037" / "dex\n038" ----
+# 防止上传的文件已损坏（如全 0 字节、被文件管理器写坏、CRLF 篡改等）
+info "校验 dex 文件头 ..."
+BAD=0
+for d in $DEX_LIST; do
+    f="$FW_DIR/$d"
+    magic=$(head -c 4 "$f" 2>/dev/null)
+    ver=$(head -c 8 "$f" 2>/dev/null | tail -c 4)
+    size=$(wc -c < "$f")
+    if [ "$magic" != "dex
+" ]; then
+        # magic 不是 "dex\n"，损坏
+        err "$d 文件头损坏: magic=$(printf '%s' "$magic" | od -An -tx1 | tr -d ' ') 大小=$size"
+        err "  期望 magic=64 65 78 0a (dex\\n)，实际不是 → 文件已被清零/篡改/解压失败"
+        BAD=$((BAD+1))
+    else
+        ok "$d magic=dex\\n$ver 大小=$size（正常）"
+    fi
+done
+if [ "$BAD" -gt 0 ]; then
+    echo ""
+    err "检测到 $BAD 个 dex 文件已损坏（文件头不是 dex magic）"
+    echo ""
+    echo "=== 常见原因 ==="
+    echo "1. 用 MT 管理器/X-plore 等图形工具解压 framework.jar 时出错（创建了文件但没写入数据）"
+    echo "2. 用 adb pull 时中断后用空文件占位"
+    echo "3. 文件管理器把 .dex 当文本处理了换行符"
+    echo ""
+    echo "=== 解决方法 ==="
+    echo "在手机上用脚本提取（不要用文件管理器）："
+    echo "  1. 下载 scripts/extract_dex_on_device.sh 到手机"
+    echo "  2. su -c 'sh /sdcard/extract_dex_on_device.sh'"
+    echo "  3. 该脚本会用 toybox unzip 提取，并自动校验 dex magic"
+    echo "  4. 校验通过后再上传 /sdcard/device_input/ 下的 dex"
+    die "存在损坏的 dex 文件，请按上述方法重新提取"
+fi
+
 # ============================================================================
 step "3. 定位三个目标类所在的 dex"
 # ============================================================================
