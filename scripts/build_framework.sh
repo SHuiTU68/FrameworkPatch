@@ -47,7 +47,19 @@ MAGISK_OUT="$WORK/magisk_module"
 API_LEVEL="${API_LEVEL:-36}"   # Android 16 = 36, 默认从设备信息推断
 
 # FrameworkPatch APK 路径（由 gradlew 构建产出）
-FP_APK="$ROOT/app/build/outputs/apk/release/app-release.apk"
+# 实际可能是 app-release.apk 或 app-release-unsigned.apk（无 signing 配置时）
+FP_APK_DIR="$ROOT/app/build/outputs/apk/release"
+FP_APK=""
+for candidate in app-release.apk app-release-unsigned.apk; do
+    if [ -f "$FP_APK_DIR/$candidate" ]; then
+        FP_APK="$FP_APK_DIR/$candidate"
+        break
+    fi
+done
+# 兜底：目录下任意 release apk
+if [ -z "$FP_APK" ]; then
+    FP_APK=$(ls "$FP_APK_DIR"/*.apk 2>/dev/null | head -1)
+fi
 
 # baksmali/smali jar：优先复用 extract_smali.sh 已构建的（在 $ROOT 下），
 # 否则自己构建
@@ -153,7 +165,7 @@ done
 # ============================================================================
 step "6. 从 FrameworkPatch APK 取出 classes.dex（作为 framework 的 classesN.dex）"
 # ============================================================================
-[ -f "$FP_APK" ] || die "FrameworkPatch APK 不存在: $FP_APK"
+[ -n "$FP_APK" ] && [ -f "$FP_APK" ] || die "FrameworkPatch APK 不存在: 在 $FP_APK_DIR 下找不到任何 release apk"
 info "从 $FP_APK 取出 FrameworkPatch dex..."
 FP_DEX="$PATCHED_OUT/frameworkpatch.dex"
 unzip -o -j -q "$FP_APK" 'classes.dex' -d "$WORK/fp_extract" || die "解压 APK 失败"
