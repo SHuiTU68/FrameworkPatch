@@ -109,6 +109,7 @@ abstract class GenerateKeyboxTask : DefaultTask() {
         val keys = doc.getElementsByTagName("Key")
         for (i in 0 until keys.length) {
             val keyEl = keys.item(i) as Element
+            // 兼容两种格式：<Keybox> 用 "ec"；<AndroidAttestation> 用 "ecdsa"
             val algo = keyEl.getAttribute("algorithm").trim().lowercase()
             val priv = keyEl.getElementsByTagName("PrivateKey").item(0).textContent.trim().trimIndent().trim()
             val certNodes = keyEl.getElementsByTagName("Certificate")
@@ -117,7 +118,7 @@ abstract class GenerateKeyboxTask : DefaultTask() {
                 certs.add(certNodes.item(j).textContent.trim().trimIndent().trim())
             }
             when (algo) {
-                "ec" -> { ecPriv = priv; ecCerts.clear(); ecCerts.addAll(certs) }
+                "ec", "ecdsa" -> { ecPriv = priv; ecCerts.clear(); ecCerts.addAll(certs) }
                 "rsa" -> { rsaPriv = priv; rsaCerts.clear(); rsaCerts.addAll(certs) }
             }
         }
