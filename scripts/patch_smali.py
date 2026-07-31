@@ -90,6 +90,28 @@ PATCHES = [
 ]
 
 
+def _line_matches(line, anc, is_regex):
+    """检查一行是否匹配锚点（正则或字面量）。"""
+    line_stripped = line.rstrip()
+    line_no_indent = line_stripped.lstrip()
+    if is_regex:
+        # 用 search 而非 match：锚点可在行内任意位置（如 ->attach 在行尾）
+        return re.search(anc, line_stripped) is not None
+    # 字面量：去缩进后以锚点开头（允许行尾注释）
+    return line_no_indent.startswith(anc)
+
+
+def _is_skip_line(line):
+    """后续行匹配时可跳过的行：空行、.line、.local、.end local、.restart local、注释"""
+    s = line.strip()
+    if not s:
+        return True
+    if s.startswith(".line") or s.startswith(".local") or s.startswith(".end local") \
+       or s.startswith(".restart local") or s.startswith(".param") or s.startswith("#"):
+        return True
+    return False
+
+
 def patch_file(filepath, patches):
     """对单个 smali 文件应用所有相关 patch。返回 (patched_count, failed_count)。"""
     with open(filepath, encoding="utf-8") as f:
@@ -105,7 +127,6 @@ def patch_file(filepath, patches):
     failed = 0
     # 从后往前插入，避免行号偏移影响后续 patch
     for p in reversed(patches):
-        # 支持两种锚点：anchor（正则列表）或 anchor_literal（字面量列表）
         if "anchor_literal" in p:
             anchors = p["anchor_literal"]
             is_regex = False
@@ -115,54 +136,52 @@ def patch_file(filepath, patches):
         ctx_filter = p.get("context_filter", "")
         n = len(anchors)
         found_at = -1
-        for i in range(len(lines) - n + 1):
+        found_last = -1  # 锚点最后一行的索引（插入位置基准）
+        # 遍历每一行，尝试匹配锚点首行
+        for i in range(len(lines)):
+            if not _line_matches(lines[i], anchors[0], is_regex):
+                continue
+            # context_filter：首行需包含子串（如 p1/p3 区分重载）
+            if ctx_filter and ctx_filter not in lines[i].rstrip():
+                continue
+            # 首行匹配，向后找后续 n-1 个锚点行（允许跳过空行/.line/.local 等）
+            last_idx = i
             ok = True
-            for j, anc in enumerate(anchors):
-                line_stripped = lines[i + j].rstrip()
-                # 去掉行首缩进后比较（字面量匹配）
-                line_no_indent = line_stripped.lstrip()
-                if is_regex:
-                    rc = re.compile(anc)
-                    if not rc.match(line_stripped):
-                        ok = False
-                        break
-                else:
-                    # 字面量匹配：行（去缩进）包含锚点字面量
-                    # 用 startswith 而非 ==，更宽容（允许行尾注释等）
-                    if not line_no_indent.startswith(anc):
-                        ok = False
-                        break
-            if ok:
-                # 额外 context_filter：要求锚点首行包含某子串（如 p1/p3 区分重载）
-                if ctx_filter and ctx_filter not in lines[i].rstrip():
+            for j in range(1, n):
+                last_idx += 1
+                # 跳过可忽略行
+                while last_idx < len(lines) and _is_skip_line(lines[last_idx]):
+                    last_idx += 1
+                if last_idx >= len(lines):
                     ok = False
-                else:
-                    found_at = i
                     break
+                if not _line_matches(lines[last_idx], anchors[j], is_regex):
+                    ok = False
+                    break
+            if ok:
+                found_at = i
+                found_last = last_idx
+                break
         if found_at < 0:
             print(f"  [FAIL] 锚点未匹配: {p['desc']}")
-            # 调试：打印锚点首行能匹配的所有位置 + 后续几行
             print(f"         锚点模式: {'literal' if not is_regex else 'regex'}")
             print(f"         锚点首行: {anchors[0]!r}")
-            # 找所有包含锚点首行关键词的行，打印它和后续 n 行
-            kw = anchors[0] if not is_regex else anchors[0]
-            # 用关键词的前 30 字符做模糊搜索
-            search_kw = kw[:30] if len(kw) > 30 else kw
+            # 调试：打印首行能模糊匹配的位置 + 后续 5 行
+            search_kw = anchors[0][:30] if len(anchors[0]) > 30 else anchors[0]
             for idx, ln in enumerate(lines):
-                ln_stripped = ln.rstrip().lstrip()
-                if search_kw in ln_stripped:
-                    print(f"         L{idx+1} 匹配首行: {ln.rstrip()!r}")
-                    # 打印后续 n 行（锚点要求的所有行）
-                    for jj in range(1, n):
+                if search_kw in ln.rstrip().lstrip():
+                    print(f"         L{idx+1} 首行: {ln.rstrip()!r}")
+                    for jj in range(1, 6):
                         if idx + jj < len(lines):
-                            print(f"         L{idx+jj+1} 后续{jj}: {lines[idx+jj].rstrip()!r}")
+                            print(f"         L{idx+jj+1} +{jj}: {lines[idx+jj].rstrip()!r}")
                     print(f"         ---")
             failed += 1
             continue
-        insert_at = found_at + n  # 在锚点最后一行之后插入
+        # 在锚点最后一行之后插入
+        insert_at = found_last + 1
         for k, ins in enumerate(p["insert"]):
             lines.insert(insert_at + k, ins + "\n")
-        print(f"  [OK]   {p['desc']}  @ line {found_at + 1}")
+        print(f"  [OK]   {p['desc']}  @ line {found_at + 1} (插入于 line {insert_at + 1})")
         patched += 1
 
     if patched > 0:
