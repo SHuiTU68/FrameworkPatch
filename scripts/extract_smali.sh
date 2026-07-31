@@ -132,22 +132,28 @@ echo "$DEX_LIST" | sed 's/^/    - /'
 
 # ---- 文件头校验：dex magic = "dex\n035" / "dex\n036" / "dex\n037" / "dex\n038" ----
 # 防止上传的文件已损坏（如全 0 字节、被文件管理器写坏、CRLF 篡改等）
+# 注意：dex magic 第 4 字节是 0x0a(\n)，用 $() 捕获会被当字符串结尾丢掉，
+#       必须用 od 看 hex，不能用字符串比较
 info "校验 dex 文件头 ..."
 BAD=0
 for d in $DEX_LIST; do
     f="$FW_DIR/$d"
-    magic=$(head -c 4 "$f" 2>/dev/null)
-    ver=$(head -c 8 "$f" 2>/dev/null | tail -c 4)
+    # 取前 8 字节的 hex：64 65 78 0a 30 33 35 00 (dex\n035\0)
+    MAGIC_HEX=$(head -c 8 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
     size=$(wc -c < "$f")
-    if [ "$magic" != "dex
-" ]; then
-        # magic 不是 "dex\n"，损坏
-        err "$d 文件头损坏: magic=$(printf '%s' "$magic" | od -An -tx1 | tr -d ' ') 大小=$size"
-        err "  期望 magic=64 65 78 0a (dex\\n)，实际不是 → 文件已被清零/篡改/解压失败"
-        BAD=$((BAD+1))
-    else
-        ok "$d magic=dex\\n$ver 大小=$size（正常）"
-    fi
+    # 合法 dex magic: 6465780a + 版本(303335|303336|303337|303338) + 00
+    case "$MAGIC_HEX" in
+        6465780a30333500*) ok "$d magic=dex\\n035 大小=$size（正常）";;
+        6465780a30333600*) ok "$d magic=dex\\n036 大小=$size（正常）";;
+        6465780a30333700*) ok "$d magic=dex\\n037 大小=$size（正常）";;
+        6465780a30333800*) ok "$d magic=dex\\n038 大小=$size（正常）";;
+        6465780a*) warn "$d magic=dex\\n???? 大小=$size（magic 合法但版本未知: ${MAGIC_HEX:8:8}）";;
+        *)
+            err "$d 文件头损坏: magic=$MAGIC_HEX 大小=$size"
+            err "  期望 6465780a (dex\\n)，实际不是 → 文件已被清零/篡改/解压失败"
+            BAD=$((BAD+1))
+            ;;
+    esac
 done
 if [ "$BAD" -gt 0 ]; then
     echo ""

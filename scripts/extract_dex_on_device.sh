@@ -98,22 +98,28 @@ for f in "$OUT"/classes*.dex; do
     [ -f "$f" ] || continue
     NAME=$(basename "$f")
     SIZE=$(stat -c %s "$f" 2>/dev/null || wc -c < "$f")
-    # dex magic = "dex\n" (64 65 78 0a)
-    MAGIC=$(head -c 4 "$f" 2>/dev/null)
-    # 用 od 看 hex，避免 shell 转义问题
-    MAGIC_HEX=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
-    if [ "$MAGIC_HEX" = "64657800" ] || [ "$MAGIC_HEX" = "6465780a" ]; then
-        echo "[OK]   $NAME  magic=$MAGIC_HEX  大小=$SIZE"
-        GOOD=$((GOOD+1))
-    else
-        echo "[ERR]  $NAME  magic=$MAGIC_HEX  大小=$SIZE  (期望 6465780a)"
-        echo "       该文件已损坏（不是有效的 dex），可能是："
-        echo "       - 解压中断（重新跑本脚本）"
-        echo "       - framework.jar 本身损坏（检查源文件）"
-        echo "       - unzip 兼容性问题（尝试 Termux 的 unzip）"
-        BAD=$((BAD+1))
-        rm -f "$f"
-    fi
+    # 注意：dex magic = "dex\n" (64 65 78 0a)，第 4 字节是 0x0a
+    # 不能用 $() 字符串比较（会把 \n 当字符串结尾丢掉），必须看 hex
+    MAGIC_HEX=$(head -c 8 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    case "$MAGIC_HEX" in
+        6465780a30333500*) echo "[OK]   $NAME  magic=dex\\n035  大小=$SIZE"; GOOD=$((GOOD+1));;
+        6465780a30333600*) echo "[OK]   $NAME  magic=dex\\n036  大小=$SIZE"; GOOD=$((GOOD+1));;
+        6465780a30333700*) echo "[OK]   $NAME  magic=dex\\n037  大小=$SIZE"; GOOD=$((GOOD+1));;
+        6465780a30333800*) echo "[OK]   $NAME  magic=dex\\n038  大小=$SIZE"; GOOD=$((GOOD+1));;
+        6465780a*)
+            echo "[WARN] $NAME  magic=dex\\n????  大小=$SIZE  (版本未知: ${MAGIC_HEX:8:8})"
+            GOOD=$((GOOD+1))
+            ;;
+        *)
+            echo "[ERR]  $NAME  magic=$MAGIC_HEX  大小=$SIZE  (期望 6465780a)"
+            echo "       该文件已损坏（不是有效的 dex），可能是："
+            echo "       - 解压中断（重新跑本脚本）"
+            echo "       - framework.jar 本身损坏（检查源文件）"
+            echo "       - unzip 兼容性问题（尝试 Termux 的 unzip）"
+            BAD=$((BAD+1))
+            rm -f "$f"
+            ;;
+    esac
 done
 echo ""
 echo "校验结果: $GOOD 个正常, $BAD 个损坏"
