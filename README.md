@@ -153,6 +153,34 @@ invoke-static {XX}, Lcom/android/internal/util/framework/Android;->newApplicatio
 
 Replace XX with the Context register.
 
+- SystemProperties.smali (prop 级隐藏，可选但强烈推荐):
+
+> 这一步在 GMS unstable 进程内伪装 `ro.boot.verifiedbootstate` / `ro.boot.flash.locked` / `ro.boot.vbmeta.device_state` 等 BL 锁相关 prop，避免 DroidGuard 直接 `getprop` 暴露真实解锁状态。
+
+SystemProperties 通常和 Instrumentation 在同一个 .dex（`classes.dex`）。找到 `android.os.SystemProperties` 里的两个 `get` 方法，在 `native_get` 返回后、`return-object` 前，插入后置 hook：
+
+`get(Ljava/lang/String;)Ljava/lang/String;` 形如：
+```
+invoke-static {v0}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;)Ljava/lang/String;
+move-result-object v1
+invoke-static {v0, v1}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+move-result-object v1
+return-object v1
+```
+（`v0` = key 寄存器，`v1` = native_get 返回值寄存器；以你实际 smali 为准）
+
+`get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;` 形如：
+```
+invoke-static {v0, v1}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+move-result-object v2
+invoke-static {v0, v1, v2}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+move-result-object v2
+return-object v2
+```
+（`v0` = key，`v1` = def，`v2` = native_get 返回值；以你实际 smali 为准）
+
+> 仅在 GMS unstable 进程生效，其他进程零开销（hook 内部用 `spoofEnabled` 短路）。
+
 Now compile again the files:
 ```
 java -jar smali.jar a -a {API_LEVEL} classes3 -o framework/classes3.dex
