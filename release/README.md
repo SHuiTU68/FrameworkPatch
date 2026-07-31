@@ -1,10 +1,10 @@
 # FrameworkPatch build
 
-- Built at: 2026-07-31 17:31:28 UTC
+- Built at: 2026-07-31 19:03:20 UTC
 - Triggered by: SHuiTU68
-- Commit: f70e6ae7447d324ec5f632f4f9b836b065083ad8
+- Commit: 80f7b2efe000c408a3ffcf9e63c2c0d7207f1608
 - Keybox source: test
-- Device profile: 0 (0=OnePlus Ace5至尊版, 1=Pixel 9 Pro XL, 2=自定义)
+- Device profile: 1 (0=OnePlus Ace5至尊版, 1=Pixel 9 Pro XL, 2=自定义)
 - Dex files:
   - classes.dex
 
