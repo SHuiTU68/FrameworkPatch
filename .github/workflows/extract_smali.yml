@@ -1,0 +1,113 @@
+name: Extract smali adaptation info
+
+# 触发条件：
+#   1. push 到 main 且 device_input/ 下有变动（你上传 framework.jar 后自动跑）
+#   2. 手动触发（Actions 页面点 Run workflow）
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'device_input/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extract-smali
+  cancel-in-progress: true
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Check device_input/framework.jar exists
+        id: check
+        run: |
+          if [ ! -f device_input/framework.jar ]; then
+            echo "::notice::未找到 device_input/framework.jar，跳过提取（仅占位文件变动）"
+            echo "请把手机上 /system/framework/framework.jar 上传到仓库 device_input/ 目录后重新触发"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "framework.jar 大小: $(wc -c < device_input/framework.jar) 字节"
+          # GitHub 单文件 100MB 限制提醒
+          SIZE=$(wc -c < device_input/framework.jar)
+          if [ "$SIZE" -gt 104857600 ]; then
+            echo "::error::framework.jar 超过 100MB，GitHub 无法接收。请用 git-lfs 或分片"
+            exit 1
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download baksmali
+        if: steps.check.outputs.found == 'true'
+        run: |
+          # 从 maven central 下载 baksmali fat jar，依次尝试多个版本
+          for v in 3.0.5 3.0.4 2.5.2 2.5.1; do
+            url="https://repo1.maven.org/maven2/org/smali/baksmali/$v/baksmali-$v-fat.jar"
+            echo "尝试下载 baksmali $v ..."
+            if curl -fsSL -o baksmali.jar "$url"; then
+              echo "::notice::已下载 baksmali $v"
+              break
+            fi
+          done
+          test -s baksmali.jar || { echo "::error::baksmali 下载失败"; exit 1; }
+          java -jar baksmali.jar --version 2>&1 | head -1 || true
+
+      - name: Run extract script
+        if: steps.check.outputs.found == 'true'
+        run: |
+          bash scripts/extract_smali.sh
+
+      - name: Show report
+        if: steps.check.outputs.found == 'true'
+        run: |
+          echo "=========== ADAPT_REPORT.md ==========="
+          cat report/ADAPT_REPORT.md
+
+      - name: Upload full smali as artifact
+        if: steps.check.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smali-decompiled
+          path: fw_work/smali_*/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload report as artifact
+        if: steps.check.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapt-report
+          path: report/ADAPT_REPORT.md
+          retention-days: 30
+
+      - name: Commit report to main
+        if: steps.check.outputs.found == 'true'
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f report/ADAPT_REPORT.md
+          if git diff --cached --quiet; then
+            echo "报告无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: 更新 smali 适配报告 @ $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          - framework.jar MD5: $(md5sum device_input/framework.jar | awk '{print $1}')
+          - 由 extract_smali workflow 自动生成"
+          git push origin HEAD:main
