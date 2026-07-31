@@ -94,29 +94,27 @@ jobs:
       - name: Build baksmali fat jar
         if: steps.check.outputs.found == 'true'
         run: |
-          # maven central 上的 baksmali 不含依赖，必须用 fat jar
-          # google/smali 仓库 releases 也没附 jar，所以这里 clone + gradlew build 生成
-          # 用浅克隆 + 关闭 daemon 加速
+          # maven central 的 baksmali-X.jar 不含依赖（dexlib2 等），单独运行报 NoClassDefFoundError
+          # google/smali releases 也没附 jar，所以 clone + ./gradlew :baksmali:fatJar 生成
           set -e
           if [ ! -f baksmali.jar ]; then
             echo "=== clone google/smali ==="
             git clone --depth=1 https://github.com/google/smali.git /tmp/smali
             cd /tmp/smali
-            # gradle 缓存目录指向 runner 临时目录，避免污染
             export GRADLE_USER_HOME=/tmp/smali-gradle
-            echo "=== ./gradlew :baksmali:shadowJar ==="
-            ./gradlew :baksmali:shadowJar --no-daemon -q 2>&1 | tail -20 || \
-            ./gradlew :baksmali:fatJar --no-daemon -q 2>&1 | tail -20 || \
-            ./gradlew :baksmali:assemble --no-daemon -q 2>&1 | tail -20
-            # 找到产出的 fat jar
-            FAT=$(find /tmp/smali/baksmali/build/libs -name 'baksmali-*-fat.jar' -o -name 'baksmali-*-all.jar' -o -name 'baksmali-*-shadow.jar' 2>/dev/null | head -1)
+            # 该项目的 fat task 名是 :baksmali:fatJar（见 baksmali/build.gradle）
+            echo "=== ./gradlew :baksmali:fatJar ==="
+            ./gradlew :baksmali:fatJar --no-daemon --console=plain 2>&1 | tail -30
+            echo "=== build/libs 产物 ==="
+            ls -la /tmp/smali/baksmali/build/libs/ || true
+            # fatJar 产出的 fat jar 名形如 baksmali-3.0.9-fat.jar，且会建 baksmali.jar 符号链接
+            FAT=$(find /tmp/smali/baksmali/build/libs -maxdepth 1 -type f \( -name 'baksmali-*-fat.jar' -o -name 'baksmali-fat.jar' \) 2>/dev/null | head -1)
             if [ -z "$FAT" ]; then
-              # 退而求其次：用普通 jar + 手动下载依赖（dexlib2 等）
-              echo "::error::未找到 baksmali fat jar，列出 build/libs:"
-              ls -la /tmp/smali/baksmali/build/libs/ 2>/dev/null || true
+              echo "::error::未找到 baksmali fat jar"
               exit 1
             fi
-            cp "$FAT" "$GITHUB_WORKSPACE/baksmali.jar"
+            echo "选用 fat jar: $FAT"
+            cp -f "$FAT" "$GITHUB_WORKSPACE/baksmali.jar"
           fi
           echo "=== baksmali 版本 ==="
           java -jar "$GITHUB_WORKSPACE/baksmali.jar" --version 2>&1 | head -3 || true
