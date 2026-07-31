@@ -261,6 +261,8 @@ done
 step "6. 提取目标方法 smali 片段"
 # ============================================================================
 # 从 smali 文件提取 .method ... .end method 块（匹配关键词的所有重载）
+# 注意：用 index() 做字面量匹配，不能用 ~ (正则)，
+#       因为方法签名里的 () ; 在正则里有特殊含义会匹配失败
 extract_method() {
     local smali_file="$1" method_kw="$2"
     [ -f "$smali_file" ] || { echo "(文件不存在: $smali_file)"; return; }
@@ -269,7 +271,7 @@ extract_method() {
         in_method {
             buf=buf $0"\n"
             if ($0 ~ /^[[:space:]]*\.end method/) {
-                if (method_line ~ kw) {
+                if (index(method_line, kw) > 0) {
                     print "--- method ---"
                     print buf
                 }
