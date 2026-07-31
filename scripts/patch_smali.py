@@ -127,8 +127,9 @@ def patch_file(filepath, patches):
                         ok = False
                         break
                 else:
-                    # 字面量匹配：行（去缩进）== 锚点字面量
-                    if line_no_indent != anc:
+                    # 字面量匹配：行（去缩进）包含锚点字面量
+                    # 用 startswith 而非 ==，更宽容（允许行尾注释等）
+                    if not line_no_indent.startswith(anc):
                         ok = False
                         break
             if ok:
@@ -140,16 +141,22 @@ def patch_file(filepath, patches):
                     break
         if found_at < 0:
             print(f"  [FAIL] 锚点未匹配: {p['desc']}")
-            # 调试：打印文件里所有包含 native_get 的行
+            # 调试：打印锚点首行能匹配的所有位置 + 后续几行
             print(f"         锚点模式: {'literal' if not is_regex else 'regex'}")
             print(f"         锚点首行: {anchors[0]!r}")
-            if "native_get" in (anchors[0] if anchors else ""):
-                print(f"         文件里含 'native_get' 的行（前15条）:")
-                count = 0
-                for idx, ln in enumerate(lines):
-                    if "native_get" in ln and count < 15:
-                        print(f"           L{idx+1}: {ln.rstrip()!r}")
-                        count += 1
+            # 找所有包含锚点首行关键词的行，打印它和后续 n 行
+            kw = anchors[0] if not is_regex else anchors[0]
+            # 用关键词的前 30 字符做模糊搜索
+            search_kw = kw[:30] if len(kw) > 30 else kw
+            for idx, ln in enumerate(lines):
+                ln_stripped = ln.rstrip().lstrip()
+                if search_kw in ln_stripped:
+                    print(f"         L{idx+1} 匹配首行: {ln.rstrip()!r}")
+                    # 打印后续 n 行（锚点要求的所有行）
+                    for jj in range(1, n):
+                        if idx + jj < len(lines):
+                            print(f"         L{idx+jj+1} 后续{jj}: {lines[idx+jj].rstrip()!r}")
+                    print(f"         ---")
             failed += 1
             continue
         insert_at = found_at + n  # 在锚点最后一行之后插入
