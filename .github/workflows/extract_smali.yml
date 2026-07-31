@@ -147,18 +147,18 @@ jobs:
             echo "::warning::hook 点未全部找到，跳过构建 patched framework.jar"
           fi
 
-      - name: Restore keybox.xml from secret (for FrameworkPatch APK build)
+      - name: Ensure keybox.xml exists
         id: kb
         if: steps.hooks.outputs.hooks_found == 'true'
-        env:
-          KEYBOX_XML: ${{ secrets.KEYBOX_XML }}
         run: |
-          if [ -n "$KEYBOX_XML" ]; then
-            printf '%s' "$KEYBOX_XML" > keybox.xml
-            echo "source=secret" >> "$GITHUB_OUTPUT"
+          # 直接用仓库根目录的 keybox.xml（已提交）
+          # generateKeybox task 会自动读取，无需 secret
+          if [ -f keybox.xml ]; then
+            echo "source=repo" >> "$GITHUB_OUTPUT"
+            echo "使用仓库根目录 keybox.xml ($(wc -c < keybox.xml) 字节)"
           else
             echo "source=test" >> "$GITHUB_OUTPUT"
-            echo "::notice::No KEYBOX_XML secret; using test keybox."
+            echo "::notice::仓库无 keybox.xml，使用 keybox.xml.example（测试密钥）"
           fi
 
       - name: Build FrameworkPatch APK
