@@ -91,20 +91,35 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download baksmali
+      - name: Build baksmali fat jar
         if: steps.check.outputs.found == 'true'
         run: |
-          # 从 maven central 下载 baksmali fat jar，依次尝试多个版本
-          for v in 3.0.5 3.0.4 2.5.2 2.5.1; do
-            url="https://repo1.maven.org/maven2/org/smali/baksmali/$v/baksmali-$v-fat.jar"
-            echo "尝试下载 baksmali $v ..."
-            if curl -fsSL -o baksmali.jar "$url"; then
-              echo "::notice::已下载 baksmali $v"
-              break
+          # maven central 上的 baksmali 不含依赖，必须用 fat jar
+          # google/smali 仓库 releases 也没附 jar，所以这里 clone + gradlew build 生成
+          # 用浅克隆 + 关闭 daemon 加速
+          set -e
+          if [ ! -f baksmali.jar ]; then
+            echo "=== clone google/smali ==="
+            git clone --depth=1 https://github.com/google/smali.git /tmp/smali
+            cd /tmp/smali
+            # gradle 缓存目录指向 runner 临时目录，避免污染
+            export GRADLE_USER_HOME=/tmp/smali-gradle
+            echo "=== ./gradlew :baksmali:shadowJar ==="
+            ./gradlew :baksmali:shadowJar --no-daemon -q 2>&1 | tail -20 || \
+            ./gradlew :baksmali:fatJar --no-daemon -q 2>&1 | tail -20 || \
+            ./gradlew :baksmali:assemble --no-daemon -q 2>&1 | tail -20
+            # 找到产出的 fat jar
+            FAT=$(find /tmp/smali/baksmali/build/libs -name 'baksmali-*-fat.jar' -o -name 'baksmali-*-all.jar' -o -name 'baksmali-*-shadow.jar' 2>/dev/null | head -1)
+            if [ -z "$FAT" ]; then
+              # 退而求其次：用普通 jar + 手动下载依赖（dexlib2 等）
+              echo "::error::未找到 baksmali fat jar，列出 build/libs:"
+              ls -la /tmp/smali/baksmali/build/libs/ 2>/dev/null || true
+              exit 1
             fi
-          done
-          test -s baksmali.jar || { echo "::error::baksmali 下载失败"; exit 1; }
-          java -jar baksmali.jar --version 2>&1 | head -1 || true
+            cp "$FAT" "$GITHUB_WORKSPACE/baksmali.jar"
+          fi
+          echo "=== baksmali 版本 ==="
+          java -jar "$GITHUB_WORKSPACE/baksmali.jar" --version 2>&1 | head -3 || true
 
       - name: Run extract script
         if: steps.check.outputs.found == 'true'
