@@ -1,6 +1,6 @@
 # FrameworkPatch smali 适配报告
 
-由 `scripts/extract_smali.sh` 自动生成于 2026-07-31 18:47:53 UTC
+由 `scripts/extract_smali.sh` 自动生成于 2026-07-31 18:52:37 UTC
 
 ## 1. 设备信息
 
@@ -282,6 +282,36 @@
 文件: `smali_classes3/android/os/SystemProperties.smali`
 
 ```smali
+--- method ---
+.method public static whitelist get(Ljava/lang/String;)Ljava/lang/String;
+    .registers 2
+    .param p0, "key"    # Ljava/lang/String;
+    .annotation runtime Landroid/annotation/SystemApi;
+    .end annotation
+
+    .line 151
+    invoke-static {p0}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
+--- method ---
+.method private static greylist native_get(Ljava/lang/String;)Ljava/lang/String;
+    .registers 2
+    .param p0, "key"    # Ljava/lang/String;
+
+    .line 105
+    const-string v0, ""
+
+    invoke-static {p0, v0}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
 ```
 
 ### SystemProperties.get(String, String)
@@ -289,6 +319,28 @@
 文件: `smali_classes3/android/os/SystemProperties.smali`
 
 ```smali
+--- method ---
+.method public static whitelist get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    .registers 3
+    .param p0, "key"    # Ljava/lang/String;
+    .param p1, "def"    # Ljava/lang/String;
+    .annotation runtime Landroid/annotation/SystemApi;
+    .end annotation
+
+    .line 167
+    invoke-static {p0, p1}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v0
+
+    return-object v0
+.end method
+
+--- method ---
+.method private static native greylist-max-p native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    .annotation build Ldalvik/annotation/optimization/FastNative;
+    .end annotation
+.end method
+
 ```
 
 ### SystemProperties.native_get (内部调用，确认寄存器)
