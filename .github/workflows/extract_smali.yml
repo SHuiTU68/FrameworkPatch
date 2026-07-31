@@ -1,13 +1,18 @@
 name: Extract smali adaptation info
 
 # 触发条件：
-#   1. push 到 main 且 device_input/ 下有变动（你上传 framework.jar 后自动跑）
+#   1. push 到 main 且 device_input/ 或根目录 classes*.dex 有变动
+#      （兼容用户在 GitHub 网页直接上传到根目录的情况，CI 会自动挪到 device_input/）
 #   2. 手动触发（Actions 页面点 Run workflow）
 on:
   push:
     branches: [main]
     paths:
       - 'device_input/**'
+      - 'classes.dex'
+      - 'classes*.dex'
+      - 'framework.jar'
+      - 'device_info.txt'
   workflow_dispatch:
 
 permissions:
@@ -37,6 +42,33 @@ jobs:
       - name: Check input exists (framework.jar or classes*.dex)
         id: check
         run: |
+          # 兼容用户上传到根目录的情况：把根目录的 classes*.dex / framework.jar / device_info.txt 挪进 device_input/
+          mkdir -p device_input
+          moved=0
+          for f in classes.dex classes2.dex classes3.dex classes4.dex classes5.dex classes6.dex classes7.dex classes8.dex classes9.dex classes10.dex framework.jar device_info.txt; do
+            if [ -f "$f" ] && [ ! -f "device_input/$f" ]; then
+              mv "$f" "device_input/$f"
+              echo "已移动 $f -> device_input/$f"
+              moved=1
+            fi
+          done
+          # 通配兜底：根目录任何 classes*.dex
+          for f in classes*.dex; do
+            [ -f "$f" ] || continue
+            [ -f "device_input/$f" ] && continue
+            mv "$f" "device_input/$f"
+            echo "已移动 $f -> device_input/$f"
+            moved=1
+          done
+          if [ "$moved" = "1" ]; then
+            # 移动了文件，需要提交，否则下次 push paths 仍匹配根目录
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A device_input/
+            git commit -m "chore: 整理 dex 输入到 device_input/" || true
+            # 注意：不在这里 push，避免与后续 commit 冲突；后面 commit 报告时一起 push
+          fi
+
           # 优先 framework.jar，否则 classes*.dex（绕开 GitHub 25MB 网页上传限制）
           if [ -f device_input/framework.jar ]; then
             SIZE=$(wc -c < device_input/framework.jar)
