@@ -161,7 +161,7 @@ val generateKeybox by tasks.registering(GenerateKeyboxTask::class) {
     val keyboxXml = rootProject.layout.projectDirectory.file("keybox.xml")
     val exampleXml = rootProject.layout.projectDirectory.file("keybox.xml.example")
     source.set(project.providers.provider {
-        if (keyboxXml.get().asFile.exists()) keyboxXml.get() else exampleXml.get()
+        if (keyboxXml.asFile.exists()) keyboxXml else exampleXml
     })
     outputDir.set(layout.buildDirectory.dir("generated/source/keybox/com/android/internal/util/framework"))
 }
