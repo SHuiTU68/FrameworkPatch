@@ -22,6 +22,7 @@ import sys
 HOOK_MARKER = "Lcom/android/internal/util/framework/Android;"
 
 # 每个 patch 点：smali 文件相对路径 + 锚点行（正则，需连续匹配）+ 插入行
+# 锚点正则用 ^\s* 开头（兼容不同缩进），用 index 字面量匹配方法签名
 # 寄存器分析依据 ADAPT_REPORT.md 的真实 smali：
 #   - engineGetCertificateChain: v2=leaf, v3=chain[], v4=0；.registers 11
 #   - newApplication(Class,Context): p1=context；.registers 3
@@ -33,7 +34,7 @@ PATCHES = [
         "file": "android/security/keystore2/AndroidKeyStoreSpi.smali",
         "desc": "engineGetCertificateChain",
         # 锚点：aput-object v2, v3, v4（leaf 放入 chain[0]）
-        "anchor": [r'^    aput-object v2, v3, v4$'],
+        "anchor": [r'^\s*aput-object v2, v3, v4\s*$'],
         "insert": [
             '    invoke-static {v3}, Lcom/android/internal/util/framework/Android;->engineGetCertificateChain([Ljava/security/cert/Certificate;)[Ljava/security/cert/Certificate;',
             '    move-result-object v3',
@@ -43,7 +44,8 @@ PATCHES = [
         "file": "android/app/Instrumentation.smali",
         "desc": "newApplication(Class, Context) — p1=context",
         # 锚点：attach(p1) 调用行（仅重载1有 p1）
-        "anchor": [r'^    invoke-virtual \{v0, p1\}, Landroid/app/Application;->attach\(Landroid/content/Context;\)V$'],
+        "anchor": [r'attach\(Landroid/content/Context;\)V\s*$'],
+        "context_filter": "p1",  # 仅在该行包含 p1 时才匹配（区分两个重载）
         "insert": [
             '    invoke-static {p1}, Lcom/android/internal/util/framework/Android;->newApplication(Landroid/content/Context;)V',
         ],
@@ -52,7 +54,8 @@ PATCHES = [
         "file": "android/app/Instrumentation.smali",
         "desc": "newApplication(ClassLoader, String, Context) — p3=context",
         # 锚点：attach(p3) 调用行（仅重载2有 p3）
-        "anchor": [r'^    invoke-virtual \{v0, p3\}, Landroid/app/Application;->attach\(Landroid/content/Context;\)V$'],
+        "anchor": [r'attach\(Landroid/content/Context;\)V\s*$'],
+        "context_filter": "p3",  # 仅在该行包含 p3 时才匹配
         "insert": [
             '    invoke-static {p3}, Lcom/android/internal/util/framework/Android;->newApplication(Landroid/content/Context;)V',
         ],
@@ -61,9 +64,10 @@ PATCHES = [
         "file": "android/os/SystemProperties.smali",
         "desc": "SystemProperties.get(String) — p0=key, v0=native返回值",
         # 锚点：native_get(String) 调用 + 紧跟的 move-result-object v0
-        "anchor": [
-            r'^    invoke-static \{p0\}, Landroid/os/SystemProperties;->native_get\(Ljava/lang/String;\)Ljava/lang/String;$',
-            r'^    move-result-object v0$',
+        # 用 index 字面量匹配，不用正则（避免 () 元字符问题）
+        "anchor_literal": [
+            "invoke-static {p0}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;)Ljava/lang/String;",
+            "move-result-object v0",
         ],
         "insert": [
             '    invoke-static {p0, v0}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;',
@@ -74,9 +78,9 @@ PATCHES = [
         "file": "android/os/SystemProperties.smali",
         "desc": "SystemProperties.get(String, String) — p0=key, p1=def, v0=native返回值",
         # 锚点：native_get(String, String) 调用 + 紧跟的 move-result-object v0
-        "anchor": [
-            r'^    invoke-static \{p0, p1\}, Landroid/os/SystemProperties;->native_get\(Ljava/lang/String;Ljava/lang/String;\)Ljava/lang/String;$',
-            r'^    move-result-object v0$',
+        "anchor_literal": [
+            "invoke-static {p0, p1}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            "move-result-object v0",
         ],
         "insert": [
             '    invoke-static {p0, p1, v0}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;',
@@ -101,20 +105,51 @@ def patch_file(filepath, patches):
     failed = 0
     # 从后往前插入，避免行号偏移影响后续 patch
     for p in reversed(patches):
-        anchor_res = [re.compile(a) for a in p["anchor"]]
-        n = len(anchor_res)
+        # 支持两种锚点：anchor（正则列表）或 anchor_literal（字面量列表）
+        if "anchor_literal" in p:
+            anchors = p["anchor_literal"]
+            is_regex = False
+        else:
+            anchors = p["anchor"]
+            is_regex = True
+        ctx_filter = p.get("context_filter", "")
+        n = len(anchors)
         found_at = -1
         for i in range(len(lines) - n + 1):
             ok = True
-            for j, rc in enumerate(anchor_res):
-                if not rc.match(lines[i + j].rstrip("\n")):
-                    ok = False
-                    break
+            for j, anc in enumerate(anchors):
+                line_stripped = lines[i + j].rstrip()
+                # 去掉行首缩进后比较（字面量匹配）
+                line_no_indent = line_stripped.lstrip()
+                if is_regex:
+                    rc = re.compile(anc)
+                    if not rc.match(line_stripped):
+                        ok = False
+                        break
+                else:
+                    # 字面量匹配：行（去缩进）== 锚点字面量
+                    if line_no_indent != anc:
+                        ok = False
+                        break
             if ok:
-                found_at = i
-                break
+                # 额外 context_filter：要求锚点首行包含某子串（如 p1/p3 区分重载）
+                if ctx_filter and ctx_filter not in lines[i].rstrip():
+                    ok = False
+                else:
+                    found_at = i
+                    break
         if found_at < 0:
             print(f"  [FAIL] 锚点未匹配: {p['desc']}")
+            # 调试：打印文件里所有包含 native_get 的行
+            print(f"         锚点模式: {'literal' if not is_regex else 'regex'}")
+            print(f"         锚点首行: {anchors[0]!r}")
+            if "native_get" in (anchors[0] if anchors else ""):
+                print(f"         文件里含 'native_get' 的行（前15条）:")
+                count = 0
+                for idx, ln in enumerate(lines):
+                    if "native_get" in ln and count < 15:
+                        print(f"           L{idx+1}: {ln.rstrip()!r}")
+                        count += 1
             failed += 1
             continue
         insert_at = found_at + n  # 在锚点最后一行之后插入
