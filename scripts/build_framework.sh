@@ -38,8 +38,9 @@ step() { echo ""; echo -e "${B}========== $* ==========${N}"; }
 # ============================================================================
 # 0. 路径与参数
 # ============================================================================
+# 注意：WORK 必须与 extract_smali.sh 一致（fw_work），复用其反编译产物
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
-WORK="${WORK:-$ROOT/.work}"
+WORK="${WORK:-fw_work}"
 FW_DIR="$WORK/framework"
 PATCHED_OUT="$WORK/patched_framework"
 MAGISK_OUT="$WORK/magisk_module"
@@ -48,8 +49,10 @@ API_LEVEL="${API_LEVEL:-36}"   # Android 16 = 36, 默认从设备信息推断
 # FrameworkPatch APK 路径（由 gradlew 构建产出）
 FP_APK="$ROOT/app/build/outputs/apk/release/app-release.apk"
 
-BAKSMALI_JAR="$WORK/baksmali.jar"
-SMALI_JAR="$WORK/smali.jar"
+# baksmali/smali jar：优先复用 extract_smali.sh 已构建的（在 $ROOT 下），
+# 否则自己构建
+BAKSMALI_JAR="$ROOT/baksmali.jar"
+SMALI_JAR="$ROOT/smali.jar"
 SMALI_SRC="/tmp/smali"
 
 mkdir -p "$WORK" "$PATCHED_OUT"
@@ -97,10 +100,16 @@ for d in $DEX_TO_PATCH; do
 done
 
 # ============================================================================
-step "3. baksmali 反编译 classes.dex 和 classes3.dex"
+step "3. baksmali 反编译 classes.dex 和 classes3.dex（复用 extract_smali.sh 产物）"
 # ============================================================================
+# extract_smali.sh 已反编译到 $WORK/smali_classes 和 $WORK/smali_classes3
+# 这里检查是否存在，缺失才补反编译（保证可独立运行）
 for d in $DEX_TO_PATCH; do
     out_dir="$WORK/smali_${d%.dex}"
+    if [ -d "$out_dir" ] && [ -n "$(find "$out_dir" -name '*.smali' 2>/dev/null | head -1)" ]; then
+        ok "$d 已反编译（复用 extract_smali.sh 产物: $out_dir, $(find "$out_dir" -name '*.smali' | wc -l) 个 smali）"
+        continue
+    fi
     rm -rf "$out_dir"
     info "baksmali d $d -> $out_dir"
     java -jar "$BAKSMALI_JAR" d "$FW_DIR/$d" -o "$out_dir" 2>"$WORK/baksmali_${d%.dex}.err" \
