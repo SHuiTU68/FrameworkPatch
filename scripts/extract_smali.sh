@@ -38,24 +38,49 @@ die()  { err "$1"; exit 1; }
 step "0. 环境检查"
 # ============================================================================
 command -v java  >/dev/null 2>&1 || die "未找到 java"
-command -v unzip >/dev/null 2>&1 || die "未找到 unzip"
-[ -f "$FW_JAR" ]        || die "未找到 framework.jar: $FW_JAR（请放到 device_input/framework.jar）"
 [ -f "$BAKSMALI_JAR" ]  || die "未找到 baksmali.jar: $BAKSMALI_JAR"
 ok "java:   $(java -version 2>&1 | head -1)"
-ok "fw_jar: $FW_JAR ($(wc -c < "$FW_JAR") 字节)"
 ok "baksmali: $BAKSMALI_JAR"
+
+# 输入源：优先 framework.jar（完整），否则用 device_input/*.dex（分片，绕开 GitHub 25MB 限制）
+DEX_INPUT_DIR="${DEX_INPUT_DIR:-device_input}"
+INPUT_MODE="none"
+if [ -f "$FW_JAR" ]; then
+    INPUT_MODE="jar"
+    command -v unzip >/dev/null 2>&1 || die "输入是 jar 但未找到 unzip"
+    ok "输入模式: framework.jar ($FW_JAR, $(wc -c < "$FW_JAR") 字节)"
+elif [ -d "$DEX_INPUT_DIR" ]; then
+    DEX_INPUTS=$(cd "$DEX_INPUT_DIR" && ls -1 classes*.dex 2>/dev/null | sort -V)
+    if [ -n "$DEX_INPUTS" ]; then
+        INPUT_MODE="dex"
+        DEX_INPUT_COUNT=$(echo "$DEX_INPUTS" | wc -l | tr -d ' ')
+        ok "输入模式: $DEX_INPUT_COUNT 个 dex 文件 ($DEX_INPUT_DIR/，绕开 GitHub 25MB 限制)"
+        echo "$DEX_INPUTS" | sed 's/^/    - /'
+    fi
+fi
+[ "$INPUT_MODE" != "none" ] || die "未找到输入：请把 framework.jar 或 classes*.dex 放到 device_input/（手机端用 scripts/extract_dex_on_device.sh 提取 dex）"
 
 mkdir -p "$WORK" "$OUT_DIR"
 
 # ============================================================================
-step "1. 采集 framework.jar 元信息"
+step "1. 采集输入元信息"
 # ============================================================================
-FW_SIZE=$(wc -c < "$FW_JAR")
-FW_MD5=$(md5sum "$FW_JAR" | awk '{print $1}')
-FW_SHA256=$(sha256sum "$FW_JAR" | awk '{print $1}')
-ok "大小: $FW_SIZE 字节"
-ok "MD5:    $FW_MD5"
-ok "SHA256: $FW_SHA256"
+FW_SIZE="（dex 模式，无整体大小）"
+FW_MD5="（dex 模式，无整体 MD5）"
+FW_SHA256="（dex 模式，无整体 SHA256）"
+if [ "$INPUT_MODE" = "jar" ]; then
+    FW_SIZE=$(wc -c < "$FW_JAR")
+    FW_MD5=$(md5sum "$FW_JAR" | awk '{print $1}')
+    FW_SHA256=$(sha256sum "$FW_JAR" | awk '{print $1}')
+    ok "大小: $FW_SIZE 字节"
+    ok "MD5:    $FW_MD5"
+    ok "SHA256: $FW_SHA256"
+else
+    # dex 模式：算所有 dex 的合并 MD5 作为指纹
+    ok "dex 模式：合并 MD5: $(cat "$DEX_INPUT_DIR"/classes*.dex | md5sum | awk '{print $1}')"
+    echo "各 dex 大小:"
+    (cd "$DEX_INPUT_DIR" && ls -la classes*.dex 2>/dev/null) | awk '{printf "    %s  %s\n", $5, $NF}'
+fi
 
 # 设备信息（可选，用户上传 device_info.txt）
 DEV_MODEL="（未提供）"
@@ -86,17 +111,23 @@ else
 fi
 
 # ============================================================================
-step "2. unzip 解出 dex"
+step "2. 准备 dex 文件"
 # ============================================================================
 FW_DIR="$WORK/framework"
 rm -rf "$FW_DIR"
 mkdir -p "$FW_DIR"
-unzip -o -q "$FW_JAR" -d "$FW_DIR" || die "unzip 失败"
+if [ "$INPUT_MODE" = "jar" ]; then
+    info "从 framework.jar 解出 dex ..."
+    unzip -o -q "$FW_JAR" -d "$FW_DIR" || die "unzip 失败"
+else
+    info "从 $DEX_INPUT_DIR/ 拷贝 dex ..."
+    cp -f "$DEX_INPUT_DIR"/classes*.dex "$FW_DIR"/
+fi
 
 DEX_LIST=$(cd "$FW_DIR" && ls -1 classes*.dex 2>/dev/null | sort -V)
-[ -n "$DEX_LIST" ] || die "framework.jar 未含 classes*.dex"
+[ -n "$DEX_LIST" ] || die "未找到 classes*.dex"
 DEX_COUNT=$(echo "$DEX_LIST" | wc -l | tr -d ' ')
-ok "含 $DEX_COUNT 个 dex:"
+ok "共 $DEX_COUNT 个 dex:"
 echo "$DEX_LIST" | sed 's/^/    - /'
 
 # ============================================================================

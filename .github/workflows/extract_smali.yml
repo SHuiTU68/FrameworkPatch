@@ -34,23 +34,30 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Check device_input/framework.jar exists
+      - name: Check input exists (framework.jar or classes*.dex)
         id: check
         run: |
-          if [ ! -f device_input/framework.jar ]; then
-            echo "::notice::未找到 device_input/framework.jar，跳过提取（仅占位文件变动）"
-            echo "请把手机上 /system/framework/framework.jar 上传到仓库 device_input/ 目录后重新触发"
+          # 优先 framework.jar，否则 classes*.dex（绕开 GitHub 25MB 网页上传限制）
+          if [ -f device_input/framework.jar ]; then
+            SIZE=$(wc -c < device_input/framework.jar)
+            echo "framework.jar 大小: $SIZE 字节"
+            if [ "$SIZE" -gt 104857600 ]; then
+              echo "::error::framework.jar 超过 100MB，请改上传 classes*.dex（手机用 scripts/extract_dex_on_device.sh 提取）"
+              exit 1
+            fi
+            echo "input_mode=jar" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          elif ls device_input/classes*.dex >/dev/null 2>&1; then
+            DEX_COUNT=$(ls -1 device_input/classes*.dex 2>/dev/null | wc -l)
+            echo "检测到 $DEX_COUNT 个 dex 文件:"
+            ls -la device_input/classes*.dex
+            echo "input_mode=dex" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::未找到 framework.jar 或 classes*.dex，跳过提取"
+            echo "手机上执行: su -c 'sh scripts/extract_dex_on_device.sh' 提取 dex 后上传到 device_input/"
             echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          echo "framework.jar 大小: $(wc -c < device_input/framework.jar) 字节"
-          # GitHub 单文件 100MB 限制提醒
-          SIZE=$(wc -c < device_input/framework.jar)
-          if [ "$SIZE" -gt 104857600 ]; then
-            echo "::error::framework.jar 超过 100MB，GitHub 无法接收。请用 git-lfs 或分片"
-            exit 1
-          fi
-          echo "found=true" >> "$GITHUB_OUTPUT"
 
       - name: Download baksmali
         if: steps.check.outputs.found == 'true'
@@ -106,8 +113,14 @@ jobs:
             echo "报告无变化，跳过提交"
             exit 0
           fi
+          INPUT_DIGEST="unknown"
+          if [ -f device_input/framework.jar ]; then
+            INPUT_DIGEST="jar:$(md5sum device_input/framework.jar | awk '{print $1}')"
+          else
+            INPUT_DIGEST="dex:$(cat device_input/classes*.dex | md5sum | awk '{print $1}')"
+          fi
           git commit -m "chore: 更新 smali 适配报告 @ $(date -u '+%Y-%m-%d %H:%M UTC')
 
-          - framework.jar MD5: $(md5sum device_input/framework.jar | awk '{print $1}')
+          - 输入指纹: $INPUT_DIGEST
           - 由 extract_smali workflow 自动生成"
           git push origin HEAD:main
