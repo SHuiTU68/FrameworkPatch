@@ -130,6 +130,86 @@ jobs:
           echo "=========== ADAPT_REPORT.md ==========="
           cat report/ADAPT_REPORT.md
 
+      # ===== 构建 patched framework.jar =====
+      # 需要 3 个 hook 类都找到才构建
+      - name: Check hook points found
+        id: hooks
+        if: steps.check.outputs.found == 'true'
+        run: |
+          # 从报告里判断 3 个 hook 点是否都找到
+          if grep -q "AndroidKeyStoreSpi.*✓" report/ADAPT_REPORT.md \
+             && grep -q "Instrumentation.*✓" report/ADAPT_REPORT.md \
+             && grep -q "SystemProperties.*✓" report/ADAPT_REPORT.md; then
+            echo "hooks_found=true" >> "$GITHUB_OUTPUT"
+            echo "3 个 hook 点全部找到，开始构建 patched framework.jar"
+          else
+            echo "hooks_found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::hook 点未全部找到，跳过构建 patched framework.jar"
+          fi
+
+      - name: Restore keybox.xml from secret (for FrameworkPatch APK build)
+        id: kb
+        if: steps.hooks.outputs.hooks_found == 'true'
+        env:
+          KEYBOX_XML: ${{ secrets.KEYBOX_XML }}
+        run: |
+          if [ -n "$KEYBOX_XML" ]; then
+            printf '%s' "$KEYBOX_XML" > keybox.xml
+            echo "source=secret" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=test" >> "$GITHUB_OUTPUT"
+            echo "::notice::No KEYBOX_XML secret; using test keybox."
+          fi
+
+      - name: Build FrameworkPatch APK
+        if: steps.hooks.outputs.hooks_found == 'true'
+        env:
+          PROFILE: '0'
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace -PactiveProfile=$PROFILE
+
+      - name: Detect API level from device_info
+        id: api
+        if: steps.hooks.outputs.hooks_found == 'true'
+        run: |
+          API=36
+          if [ -f device_input/device_info.txt ]; then
+            API=$(grep -oP 'ro\.build\.version\.sdk=\K[0-9]+' device_input/device_info.txt | head -1 || true)
+            [ -z "$API" ] && API=36
+          fi
+          echo "API level: $API"
+          echo "api_level=$API" >> "$GITHUB_OUTPUT"
+
+      - name: Build patched framework.jar + Magisk module
+        if: steps.hooks.outputs.hooks_found == 'true'
+        env:
+          API_LEVEL: ${{ steps.api.outputs.api_level }}
+        run: |
+          bash scripts/build_framework.sh
+
+      - name: Upload patched framework.jar as artifact
+        if: steps.hooks.outputs.hooks_found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-framework
+          path: |
+            release/framework.jar
+            release/classes.dex.patched
+            release/classes3.dex.patched
+            release/frameworkpatch.dex
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Magisk module as artifact
+        if: steps.hooks.outputs.hooks_found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameworkPatch-Magisk-module
+          path: release/FrameworkPatch-PLC110-Magisk.zip
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Upload full smali as artifact
         if: steps.check.outputs.found == 'true'
         uses: actions/upload-artifact@v4
@@ -147,15 +227,19 @@ jobs:
           path: report/ADAPT_REPORT.md
           retention-days: 30
 
-      - name: Commit report to main
+      - name: Commit report + build artifacts to main
         if: steps.check.outputs.found == 'true'
         run: |
           set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f report/ADAPT_REPORT.md
+          # 如果构建了 patched framework.jar / Magisk 模块，也提交（release/ 被 .gitignore 忽略，需 -f）
+          if [ "${{ steps.hooks.outputs.hooks_found }}" = "true" ] && [ -d release ]; then
+            git add -f release/
+          fi
           if git diff --cached --quiet; then
-            echo "报告无变化，跳过提交"
+            echo "无变化，跳过提交"
             exit 0
           fi
           INPUT_DIGEST="unknown"
@@ -164,8 +248,13 @@ jobs:
           else
             INPUT_DIGEST="dex:$(cat device_input/classes*.dex | md5sum | awk '{print $1}')"
           fi
-          git commit -m "chore: 更新 smali 适配报告 @ $(date -u '+%Y-%m-%d %H:%M UTC')
+          ARTIFACTS_INFO="无构建产物"
+          if [ -f release/FrameworkPatch-PLC110-Magisk.zip ]; then
+            ARTIFACTS_INFO="含 patched framework.jar + Magisk 模块"
+          fi
+          git commit -m "build: smali 适配报告 + patched framework.jar @ $(date -u '+%Y-%m-%d %H:%M UTC')
 
           - 输入指纹: $INPUT_DIGEST
+          - 产物: $ARTIFACTS_INFO
           - 由 extract_smali workflow 自动生成"
           git push origin HEAD:main
