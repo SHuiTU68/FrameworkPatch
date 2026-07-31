@@ -12,6 +12,16 @@ on:
       - 'gradle/wrapper/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: '设备指纹 profile（0=OnePlus Ace5至尊版, 1=Pixel 9 Pro XL, 2=自定义占位）'
+        required: false
+        type: choice
+        default: '0'
+        options:
+          - '0'
+          - '1'
+          - '2'
 
 permissions:
   contents: write
@@ -61,7 +71,9 @@ jobs:
           fi
 
       - name: Build release APK
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        env:
+          PROFILE: ${{ inputs.profile || '0' }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace -PactiveProfile=$PROFILE
 
       - name: Locate and verify classes.dex
         id: dex
@@ -83,6 +95,7 @@ jobs:
       - name: Write build metadata
         env:
           KB_SOURCE: ${{ steps.kb.outputs.source }}
+          PROFILE: ${{ inputs.profile || '0' }}
         run: |
           {
             echo "# FrameworkPatch build"
@@ -91,6 +104,7 @@ jobs:
             echo "- Triggered by: ${{ github.actor }}"
             echo "- Commit: ${{ github.sha }}"
             echo "- Keybox source: ${KB_SOURCE}"
+            echo "- Device profile: ${PROFILE} (0=OnePlus Ace5至尊版, 1=Pixel 9 Pro XL, 2=自定义)"
             echo "- Dex files:"
             (cd release && ls -1 *.dex | sed 's/^/  - /')
             echo ""

@@ -2,7 +2,7 @@
 Modify framework.jar to build a valid certificate chain.
 
 > 适配 Android 15 / 16（compileSdk 35，AGP 8.7.3 / Gradle 8.9）。
-> Keybox 改为从 `keybox.xml` 自动生成，构建指纹内置 OnePlus 13 / Pixel 9 Pro XL + 自定义占位。
+> Keybox 改为从 `keybox.xml` 自动生成；设备指纹支持 OnePlus Ace 5 至尊版 / Pixel 9 Pro XL + 自定义占位，CI 可选。
 
 ## Requirements
 - Intermediate Windows and Linux knowledge.
@@ -45,17 +45,23 @@ sudo apt install -y default-jdk zipalign
 ```
 
 ## 设备指纹切换
-`Android.java` 顶部 `ACTIVE_PROFILE` 控制对 GMS unstable 进程伪装的指纹：
-- `0` — OnePlus 13 (Android 16)（默认）
-- `1` — Pixel 9 Pro XL (Android 16)
-- `2` — 占位，填入你自己的指纹
+设备指纹由编译期参数 `-PactiveProfile=N` 决定（生成 `ProfileConfig.java` 注入），无需改源码：
+- `0` — OnePlus Ace 5 至尊版 / PLC110 (Android 16)（默认）
+- `1` — Pixel 9 Pro XL / komodo (Android 16)
+- `2` — 占位，在 [Android.java](app/src/main/java/com/android/internal/util/framework/Android.java) 的 `PROFILES` 填入你自己的指纹
 
-修改该常量后重新构建即可。
+### 在 CI 中切换
+GitHub Actions 手动触发（`workflow_dispatch`）时，会出现 `profile` 下拉选项（0/1/2），选择后构建即用该指纹。push 触发默认用 `0`。
+
+本地构建示例：
+```bash
+./gradlew :app:assembleRelease -PactiveProfile=1
+```
 
 ## CI 自动构建
 `.github/workflows/build.yml` 在推送到 `main` 分支（或手动触发）时：
 1. 从仓库 secret `KEYBOX_XML`（如有配置）恢复真实 `keybox.xml`；
-2. 构建 release APK，解出 `classes.dex`；
+2. 按 `profile` 输入（默认 0）选择设备指纹，构建 release APK，解出 `classes.dex`；
 3. 把 `release/`（含 `classes.dex`、`app-release.apk`、说明）**直接 commit 到 `main` 分支**（不提 PR）。
 
 配置真实密钥：仓库 Settings → Secrets and variables → Actions → 新增 `KEYBOX_XML`（整个 XML 文件内容）。

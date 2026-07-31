@@ -49,8 +49,9 @@ android {
 
     sourceSets {
         getByName("main") {
-            // Keybox.java 由 generateKeybox 任务生成，仓库里不硬编码真实私钥
+            // Keybox.java / ProfileConfig.java 由生成任务产出，仓库里不硬编码
             java.srcDir(layout.buildDirectory.dir("generated/source/keybox"))
+            java.srcDir(layout.buildDirectory.dir("generated/source/profileconfig"))
         }
     }
 }
@@ -169,3 +170,33 @@ val generateKeybox by tasks.registering(GenerateKeyboxTask::class) {
 // 编译前先生成 Keybox.java
 tasks.matching { it.name.startsWith("compile") && it.name.contains("JavaWithJavac", ignoreCase = true) }
     .configureEach { dependsOn(generateKeybox) }
+
+/**
+ * 生成 ProfileConfig.java（含 ACTIVE_PROFILE 常量）。
+ *
+ * 通过 -PactiveProfile=N 选择设备指纹 profile，默认 0。
+ * 工作流 workflow_dispatch 的 choice input 会传入此属性。
+ *
+ * 生成内容形如:
+ *   public final class ProfileConfig { public static final int ACTIVE_PROFILE = 0; }
+ */
+val generateProfileConfig by tasks.registering {
+    val profile = (project.findProperty("activeProfile") as String?)?.trim()?.toIntOrNull()
+        ?.coerceIn(0, 2) ?: 0
+    val outDir = layout.buildDirectory.dir("generated/source/profileconfig/com/android/internal/util/framework").get().asFile
+    outputs.dir(outDir)
+    doLast {
+        outDir.mkdirs()
+        outDir.resolve("ProfileConfig.java").writeText(
+            "package com.android.internal.util.framework;\n\n" +
+            "public final class ProfileConfig {\n" +
+            "    public static final int ACTIVE_PROFILE = $profile;\n" +
+            "    private ProfileConfig() {}\n" +
+            "}\n"
+        )
+        logger.lifecycle("ProfileConfig: ACTIVE_PROFILE = $profile")
+    }
+}
+
+tasks.matching { it.name.startsWith("compile") && it.name.contains("JavaWithJavac", ignoreCase = true) }
+    .configureEach { dependsOn(generateProfileConfig) }

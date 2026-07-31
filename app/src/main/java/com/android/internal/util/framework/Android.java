@@ -62,27 +62,31 @@ public final class Android {
     private static final JcaX509CertificateConverter CERT_CONVERTER = new JcaX509CertificateConverter();
     private static final JcaPEMKeyConverter KEY_CONVERTER = new JcaPEMKeyConverter();
 
-    // 设备指纹候选表。索引 0 默认启用，其余可作为备用/占位。
-    private static final int ACTIVE_PROFILE = 0;
+    // 设备指纹候选表。索引由编译期 -PactiveProfile=N 决定（见 ProfileConfig）。
+    private static final int ACTIVE_PROFILE = ProfileConfig.ACTIVE_PROFILE;
     private static final List<HashMap<String, String>> PROFILES = new ArrayList<>();
 
     // prop 级隐藏映射表（在 spoofEnabled 进程内对 SystemProperties.get 生效）。
     // 通用「已锁 + Verified Boot 完整」状态值，与设备无关。
     private static final HashMap<String, String> PROP_SPOOF = new HashMap<>();
 
+    // contains 逻辑：原值包含某子串时替换为新值（如 bootmode 含 recovery → unknown）。
+    private static final HashMap<String, String[]> PROP_CONTAINS = new HashMap<>();
+
     static {
-        // Profile 0 — OnePlus 13 (Android 16)
+        // Profile 0 — OnePlus Ace 5 至尊版 (PLC110, Android 16)
+        // fingerprint 格式 brand/device/product = OnePlus/PLC110/OP60EDL1
         PROFILES.add(buildProfile(
-                "OnePlus", "OnePlus", "OP60EDL1", "PLC110", "CPH2653",
+                "OnePlus", "OnePlus", "PLC110", "OP60EDL1", "PLC110",
                 "OnePlus/PLC110/OP60EDL1:16/BP2A.250605.015/V.1be4275_8cb9c6_8ac72d:user/release-keys",
                 "16", "BP2A.250605.015", "V.1be4275_8cb9c6_8ac72d",
                 "2025-06-05", "user", "release-keys",
-                // 额外 Build 字段（补全，避免与 FINGERPRINT 不一致被检测）
-                "OnePlus", // BOARD
-                "unknown", // BOOTLOADER
-                "qcom",    // HARDWARE
-                "",        // HOST
-                "OP60EDL1")); // RADIO
+                // BOARD/BOOTLOADER/HARDWARE 留空（initDeviceProps 跳过空值，避免写入错误值与 fingerprint 不一致）
+                "",  // BOARD
+                "",  // BOOTLOADER
+                "",  // HARDWARE
+                "",  // HOST
+                "")); // RADIO
 
         // Profile 1 — Pixel 9 Pro XL (Android 16)
         PROFILES.add(buildProfile(
@@ -100,31 +104,57 @@ public final class Android {
                 "", "", "",
                 "", "", "", "", ""));
 
-        // 通用 Verified Boot / BL 锁状态 prop（任何「已锁 + Verified」设备都一致）
+        // === Verified Boot / BL 锁状态（通用，已锁 + Verified）===
         PROP_SPOOF.put("ro.boot.verifiedbootstate", "green");
         PROP_SPOOF.put("ro.boot.flash.locked", "1");
         PROP_SPOOF.put("ro.boot.vbmeta.device_state", "locked");
+        PROP_SPOOF.put("vendor.boot.vbmeta.device_state", "locked");
+        PROP_SPOOF.put("vendor.boot.verifiedbootstate", "green");
         PROP_SPOOF.put("ro.boot.veritymode", "enforcing");
         PROP_SPOOF.put("ro.boot.space.veritymode", "enforcing");
+
+        // === warranty / oem unlock（解锁痕迹）===
         PROP_SPOOF.put("ro.boot.warranty_bit", "0");
+        PROP_SPOOF.put("ro.warranty_bit", "0");
+        PROP_SPOOF.put("ro.vendor.boot.warranty_bit", "0");
+        PROP_SPOOF.put("ro.vendor.warranty_bit", "0");
+        PROP_SPOOF.put("sys.oem_unlock_allowed", "0");
+
+        // === debuggable / secure / adb ===
+        PROP_SPOOF.put("ro.debuggable", "0");
+        PROP_SPOOF.put("ro.force.debuggable", "0");
+        PROP_SPOOF.put("ro.secure", "1");
+        PROP_SPOOF.put("ro.adb.secure", "1");
+        PROP_SPOOF.put("ro.boot.secure", "1");
         PROP_SPOOF.put("ro.boot.cpuraw", "0");
         PROP_SPOOF.put("ro.boot.cab_mask", "0");
-        PROP_SPOOF.put("ro.boot.secure", "1");
-        PROP_SPOOF.put("ro.boot.bootreason", "");
-        PROP_SPOOF.put("ro.boot.mode", "normal");
-        PROP_SPOOF.put("ro.boot.bootloader", "");
-        PROP_SPOOF.put("ro.secure", "1");
-        PROP_SPOOF.put("ro.debuggable", "0");
+
+        // === build type / tags / selinux ===
         PROP_SPOOF.put("ro.build.type", "user");
         PROP_SPOOF.put("ro.build.tags", "release-keys");
         PROP_SPOOF.put("ro.build.selinux", "1");
-        PROP_SPOOF.put("ro.adb.secure", "1");
+
+        // === OEM 专用锁状态 prop（多品牌一并覆盖，非该品牌设备读取返回原值无副作用）===
+        PROP_SPOOF.put("ro.secureboot.lockstate", "locked");          // MIUI
+        PROP_SPOOF.put("ro.boot.realmebootstate", "green");           // Realme
+        PROP_SPOOF.put("ro.boot.realme.lockstate", "1");              // Realme
         PROP_SPOOF.put("ro.boot.ftm_mode", "unknown");
+
+        // === 其他启动状态 ===
+        PROP_SPOOF.put("ro.boot.bootreason", "");
+        PROP_SPOOF.put("ro.boot.mode", "normal");
+
         // 设备相关 prop 占位（按 ACTIVE_PROFILE 填充，见 initDeviceProps）
         PROP_SPOOF.put("ro.boot.bootloader", "");
         PROP_SPOOF.put("ro.boot.hardware", "");
         PROP_SPOOF.put("ro.boot.hardware.sku", "");
         PROP_SPOOF.put("ro.product.bootloader", "");
+
+        // === contains 逻辑：原值包含子串[0]时替换为[1] ===
+        // 隐藏从 recovery 启动（magisk recovery 模式痕迹）
+        PROP_CONTAINS.put("ro.bootmode", new String[]{"recovery", "unknown"});
+        PROP_CONTAINS.put("ro.boot.bootmode", new String[]{"recovery", "unknown"});
+        PROP_CONTAINS.put("vendor.boot.bootmode", new String[]{"recovery", "unknown"});
 
         try {
             EC = parseKeyPair(Keybox.EC.PRIVATE_KEY);
@@ -458,17 +488,32 @@ public final class Android {
      * 返回后、return 前，调用本方法替换返回值。
      */
     public static String systemPropertiesGet(String key, String value) {
-        if (!spoofEnabled || key == null || key.isEmpty()) return value;
-        String spoofed = PROP_SPOOF.get(key);
-        return spoofed != null ? spoofed : value;
+        return spoofProp(key, value);
     }
 
     /**
      * SystemProperties.get(String, String) 后置 hook：同上，带默认值。
      */
     public static String systemPropertiesGet(String key, String def, String value) {
+        return spoofProp(key, value);
+    }
+
+    /**
+     * 统一 prop 替换逻辑：
+     * 1. 精确匹配 PROP_SPOOF（如 ro.boot.flash.locked → 1）；
+     * 2. contains 匹配 PROP_CONTAINS（如 bootmode 含 recovery → unknown）；
+     * 3. 其余返回原值。
+     *
+     * 仅在 spoofEnabled 进程生效，否则零开销短路。
+     */
+    private static String spoofProp(String key, String value) {
         if (!spoofEnabled || key == null || key.isEmpty()) return value;
         String spoofed = PROP_SPOOF.get(key);
-        return spoofed != null ? spoofed : value;
+        if (spoofed != null) return spoofed;
+        String[] contains = PROP_CONTAINS.get(key);
+        if (contains != null && value != null && value.contains(contains[0])) {
+            return contains[1];
+        }
+        return value;
     }
 }
