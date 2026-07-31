@@ -53,10 +53,10 @@ sudo apt install -y default-jdk zipalign
 修改该常量后重新构建即可。
 
 ## CI 自动构建
-`.github/workflows/build.yml` 在推送到 `original` 分支（或手动触发）时：
+`.github/workflows/build.yml` 在推送到 `main` 分支（或手动触发）时：
 1. 从仓库 secret `KEYBOX_XML`（如有配置）恢复真实 `keybox.xml`；
 2. 构建 release APK，解出 `classes.dex`；
-3. 把 `release/`（含 `classes.dex`、`app-release.apk`、说明）**直接 commit 到 `original` 分支**（不提 PR）。
+3. 把 `release/`（含 `classes.dex`、`app-release.apk`、说明）**直接 commit 到 `main` 分支**（不提 PR）。
 
 配置真实密钥：仓库 Settings → Secrets and variables → Actions → 新增 `KEYBOX_XML`（整个 XML 文件内容）。
 未配置时使用测试密钥构建。

@@ -2,7 +2,7 @@ name: Build and publish module
 
 on:
   push:
-    branches: [original]
+    branches: [main]
     paths:
       - 'app/**'
       - 'keybox.xml.example'
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: original
+          ref: main
           persist-credentials: true
           fetch-depth: 0
 
@@ -100,7 +100,7 @@ jobs:
           } > release/README.md
           cat release/README.md
 
-      - name: Commit artifacts to original branch
+      - name: Commit artifacts to main branch
         env:
           KB_SOURCE: ${{ steps.kb.outputs.source }}
           DEX_FILES: ${{ steps.dex.outputs.dex_files }}
@@ -123,4 +123,4 @@ jobs:
           - Keybox: ${KB_SOURCE}
           - Dex: ${DEX_FILES}"
 
-          git push origin HEAD:original
+          git push origin HEAD:main
