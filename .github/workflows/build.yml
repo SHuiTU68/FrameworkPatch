@@ -1,0 +1,126 @@
+name: Build and publish module
+
+on:
+  push:
+    branches: [original]
+    paths:
+      - 'app/**'
+      - 'keybox.xml.example'
+      - 'build.gradle.kts'
+      - 'app/build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle/wrapper/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-publish
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: original
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Restore real keybox.xml from secret (if configured)
+        id: kb
+        env:
+          KEYBOX_XML: ${{ secrets.KEYBOX_XML }}
+        run: |
+          if [ -n "$KEYBOX_XML" ]; then
+            printf '%s' "$KEYBOX_XML" > keybox.xml
+            echo "source=secret" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using real keybox.xml from repository secret."
+          else
+            echo "source=test" >> "$GITHUB_OUTPUT"
+            echo "::notice::No KEYBOX_XML secret; using keybox.xml.example (test keys)."
+          fi
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Locate and verify classes.dex
+        id: dex
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n1)
+          echo "APK path: $APK"
+          mkdir -p release
+          # 解出 classes.dex（未开 multidex，应为单个）
+          unzip -o -j "$APK" 'classes*.dex' -d release/
+          cp -f "$APK" release/app-release.apk
+          ls -la release/
+          {
+            echo "dex_files<<EOF"
+            (cd release && ls -1 *.dex)
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write build metadata
+        env:
+          KB_SOURCE: ${{ steps.kb.outputs.source }}
+        run: |
+          {
+            echo "# FrameworkPatch build"
+            echo ""
+            echo "- Built at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- Triggered by: ${{ github.actor }}"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Keybox source: ${KB_SOURCE}"
+            echo "- Dex files:"
+            (cd release && ls -1 *.dex | sed 's/^/  - /')
+            echo ""
+            echo "## 使用方法"
+            echo "把 \`classes.dex\` 按 README 注入到设备 \`/system/framework/framework.jar\`（编号递增）。"
+            echo "完整流程见仓库根目录 \`README.md\`。"
+          } > release/README.md
+          cat release/README.md
+
+      - name: Commit artifacts to original branch
+        env:
+          KB_SOURCE: ${{ steps.kb.outputs.source }}
+          DEX_FILES: ${{ steps.dex.outputs.dex_files }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # release/ 已被 .gitignore 忽略，需 -f 强制添加
+          git add -f release/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "build: release module @ $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          - Commit: ${{ github.sha }}
+          - Keybox: ${KB_SOURCE}
+          - Dex: ${DEX_FILES}"
+
+          git push origin HEAD:original
