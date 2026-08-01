@@ -2,7 +2,7 @@
 
 Pure Rust 的 Android keystore2 全局 Hook 模块——通过 ptrace 注入 +
 binder ioctl 拦截，让所有应用的 key attestation 证书链由本模块 keybox 签发。
-配套 WebUI 提供全局开关、黑名单、prop 属性隐藏、USB 调试开关。
+配套 WebUI 提供全局开关、黑名单、prop 属性隐藏。
 
 > 适配 Android 10+（SDK 29+），支持 arm64-v8a / x86_64。
 > 需要 Magisk / KernelSU / APatch 提供 root 与 `resetprop`。
@@ -57,7 +57,6 @@ App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 
 | `deny.list` | 黑名单包名（每行一个，豁免伪造） |
 | `keybox.xml` | EC/RSA keybox（私钥，勿提交） |
 | `props.conf` | prop 属性隐藏清单 |
-| `usb.conf` | USB 调试开关（`adb_enabled=1/0`） |
 | `config.toml` | daemon 后端 / 日志配置 |
 
 ### props.conf 格式
