@@ -3,18 +3,18 @@
 # Runs early, before most daemons. Keep it fast and side-effect free.
 
 MODDIR=${0%/*}
-FKTEE_DIR=/data/adb/fktee
+TEERS_DIR=/data/adb/Tee-rs
 
 # ---------- Ensure directory structure ----------
-# 配置放在 $FKTEE_DIR 根目录（与 daemon/injector 硬编码路径一致）。
-mkdir -p "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
-chmod 0700 "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs" 2>/dev/null
+# 配置放在 $TEERS_DIR 根目录（与 daemon/injector 硬编码路径一致）。
+mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
+chmod 0700 "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs" 2>/dev/null
 
 # ---------- Copy default configs (never overwrite existing) ----------
 # copy_default <module_src> <fktee_dst>
 copy_default() {
     src="$MODDIR/$1"
-    dst="$FKTEE_DIR/$2"
+    dst="$TEERS_DIR/$2"
     [ -f "$src" ] || return 1
     if [ ! -f "$dst" ]; then
         cp -f "$src" "$dst"
@@ -32,16 +32,16 @@ copy_default usb.conf       usb.conf
 
 # ---------- Clean stale runtime artifacts ----------
 # Old pid files from previous boot (process gone after reboot)
-rm -f "$FKTEE_DIR/data/fktee.pid" \
-      "$FKTEE_DIR/data/injector.pid"
+rm -f "$TEERS_DIR/data/fktee.pid" \
+      "$TEERS_DIR/data/injector.pid"
 
 # Stale restart markers (no daemon is running yet to consume them)
-rm -f "$FKTEE_DIR/restart.fktee" \
-      "$FKTEE_DIR/restart.injector" \
-      "$FKTEE_DIR/restart.all"
+rm -f "$TEERS_DIR/restart.fktee" \
+      "$TEERS_DIR/restart.injector" \
+      "$TEERS_DIR/restart.all"
 
 # Rotate oversized logs (keep last run only)
-for log in "$FKTEE_DIR/logs"/*.log; do
+for log in "$TEERS_DIR/logs"/*.log; do
     [ -f "$log" ] || continue
     size=$(wc -c < "$log" 2>/dev/null || echo 0)
     if [ "$size" -gt 1048576 ]; then

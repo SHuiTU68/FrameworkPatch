@@ -23,7 +23,7 @@ async function fetchStatus(): Promise<StatusInfo> {
     pidOf('fktee'),
     pidOf('fktee-injector'),
     pidOf('keystore2'),
-    exec(`test -f /data/adb/fktee/injected && echo yes || echo no`),
+    exec(`test -f /data/adb/Tee-rs/injected && echo yes || echo no`),
     readInjectorToml().catch(() => ({ enabled: false, keyboxPath: '' })),
   ]);
   return {
@@ -84,7 +84,7 @@ export async function renderStatus(container: HTMLElement): Promise<void> {
           刷新
         </md-filled-button>
       </div>
-      <p class="tip">重启通过向 <code>/data/adb/fktee/restart.*</code> 写入信号文件触发。</p>
+      <p class="tip">重启通过向 <code>/data/adb/Tee-rs/restart.*</code> 写入信号文件触发。</p>
       <p class="tip">切换“全局”开关后需重启 Injector 才能让 keystore2 重新读取配置。</p>
     </div>
   `;

@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     log::info!("PID={}", std::process::id());
 
     // 配置目录
-    let config_dir = PathBuf::from("/data/adb/fktee");
+    let config_dir = PathBuf::from("/data/adb/Tee-rs");
 
     // 加载配置
     let mut cfg = config::DaemonConfig::load(&config_dir.join("config.toml"))?;

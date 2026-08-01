@@ -1,6 +1,6 @@
 // Prop 属性隐藏面板
 //
-// 读写 /data/adb/fktee/props.conf（service.sh apply_props 读取）。
+// 读写 /data/adb/Tee-rs/props.conf（service.sh apply_props 读取）。
 // 总开关控制 enabled=1/0；其余 key=value 通过 resetprop 覆盖，
 // 让 Play Integrity / 反作弊检测看到伪造的 verified boot 状态等。
 import { escapeHtml, exec, showToast } from './cli';

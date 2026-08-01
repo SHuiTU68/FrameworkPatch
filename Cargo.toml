@@ -4,12 +4,13 @@ members = [
     "crates/injector",
     "crates/certgen",
     "crates/daemon",
+    "crates/hal",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82.0"
+rust-version = "1.85.0"
 license = "AGPL-3.0-or-later"
 authors = ["FKTee-rs Contributors"]
 repository = "https://github.com/SHuiTU68/FrameworkPatch"
@@ -36,8 +37,9 @@ nix = { version = "0.29", features = ["ptrace", "signal", "process", "fs", "user
 # 参考 OhMyKeymint 的做法：vendor LSPlt 源码 + Rust FFI wrapper
 # JNI（certgen 被 daemon 通过 JNI 调用，或直接用 Native API）
 jni = "0.21"
-# Android binder（daemon RPC）
-rsbinder = "0.4"
+# Android binder（HAL service 注册 / KeyMint 代理转发）
+# 0.10 提供 sync-only 模式（default-features=false），匹配 AOSP binder 线程池模型。
+rsbinder = { version = "0.10", default-features = false }
 # 文件监听（热配置）
 hotwatch = "0.5"
 # 工具

@@ -1,0 +1,17 @@
+[package]
+name = "fktee-hal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fktee-hal"
+path = "src/main.rs"
+
+[dependencies]
+rsbinder = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+[build-dependencies]
+rsbinder-aidl = "0.10"

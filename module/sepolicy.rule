@@ -1,3 +1,21 @@
+# ===== ptrace 注入路径（当前可用实现）所需规则 =====
+# keystore2 加载注入的 payload（system_file）执行
 allow keystore system_file file { execute getattr map read receive }
+# 崩溃时允许 attach 调试
 allow crash_dump keystore process *
+# keystore2 查找 default_android_service（注入后内部 RPC 用）
 allow keystore default_android_service service_manager find
+
+# ===== KeyMint HAL 替换路径（方案 A，开发中，未启用）所需规则 =====
+# fktee-hal 注册为 keymint HAL service 并被 keystore2 调用。具体 source 域
+# 取决于启动方式：经 Magisk daemon 启动通常为 magisk 域；若以 init service
+# 启动则需自定义域。下列规则以 magisk 域为例，真机调试时按实际 ps -Z 输出调整。
+#
+# 允许 HAL 进程向 servicemanager 注册/查找 service
+allow magisk default_android_service service_manager { add find }
+# 允许 keystore2 查找并调用我们注册的 keymint HAL（default_android_service）
+allow keystore default_android_service service_manager { find }
+# 允许 keystore2 与 HAL 进程经 binder 通信
+allow keystore magisk binder { call transfer }
+# 允许 HAL 进程被 binder 调用
+allow magisk keystore binder { call transfer }

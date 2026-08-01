@@ -1,11 +1,11 @@
 #!/system/bin/sh
 # daemon - fktee keystore backend watchdog
 # Keeps the fktee binary alive with exponential backoff (500ms -> 30s).
-# Honors restart signal file: /data/adb/fktee/restart.fktee  (or restart.all)
+# Honors restart signal file: /data/adb/Tee-rs/restart.fktee  (or restart.all)
 
 MODDIR=${0%/*}
-FKTEE_DIR=/data/adb/fktee
-PIDFILE="$FKTEE_DIR/data/fktee.pid"
+TEERS_DIR=/data/adb/Tee-rs
+PIDFILE="$TEERS_DIR/data/fktee.pid"
 ARCH=$(getprop ro.product.cpu.abi)
 BIN="$MODDIR/libs/$ARCH/fktee"
 
@@ -54,8 +54,8 @@ bump_backoff() {
 
 while true; do
     # Consume restart signals
-    if [ -f "$FKTEE_DIR/restart.fktee" ] || [ -f "$FKTEE_DIR/restart.all" ]; then
-        [ -f "$FKTEE_DIR/restart.fktee" ] && rm -f "$FKTEE_DIR/restart.fktee"
+    if [ -f "$TEERS_DIR/restart.fktee" ] || [ -f "$TEERS_DIR/restart.all" ]; then
+        [ -f "$TEERS_DIR/restart.fktee" ] && rm -f "$TEERS_DIR/restart.fktee"
         if is_running; then
             kill "$(cat "$PIDFILE")" 2>/dev/null
             rm -f "$PIDFILE"

@@ -57,7 +57,7 @@ export async function writeFile(path: string, content: string): Promise<void> {
 
 // 重启 daemon（touch restart 信号文件）
 export async function restartDaemon(name: string): Promise<void> {
-  const r = await exec(`touch /data/adb/fktee/restart.${name}`);
+  const r = await exec(`touch /data/adb/Tee-rs/restart.${name}`);
   if (r.errno !== 0) {
     throw new Error(`重启失败: ${r.stderr}`);
   }

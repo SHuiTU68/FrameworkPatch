@@ -2,14 +2,18 @@
 # service.sh - FKTee-rs late_start service
 # Starts the two daemons (fktee backend + injector) and keeps them alive
 # via the watchdog scripts. Also applies prop hiding and reacts to
-# file-based restart signals:  touch /data/adb/fktee/restart.{fktee,injector,all}
+# file-based restart signals:  touch /data/adb/Tee-rs/restart.{fktee,injector,all}
+#
+# 注：当前实现走 ptrace 注入路径（inject + inject_payload）。KeyMint HAL 替换
+# 路径（crates/hal，方案 A）尚为骨架，未接进启动——它需要完整 KeyMint AIDL
+# 实现才能不瘫痪 keystore2。HAL 成熟后此脚本改为启动 fktee-hal service。
 
 MODDIR=${0%/*}
-FKTEE_DIR=/data/adb/fktee
+TEERS_DIR=/data/adb/Tee-rs
 DAEMON="$MODDIR/daemon"
 DAEMON_INJECTOR="$MODDIR/daemon-injector"
-PID_FKTEE="$FKTEE_DIR/data/fktee.pid"
-PID_INJECTOR="$FKTEE_DIR/data/injector.pid"
+PID_FKTEE="$TEERS_DIR/data/fktee.pid"
+PID_INJECTOR="$TEERS_DIR/data/injector.pid"
 
 # ---------- Wait for boot completed ----------
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
@@ -19,7 +23,7 @@ done
 sleep 3
 
 # ---------- Prop hiding (resetprop, config-driven) ----------
-# 读取 /data/adb/fktee/props.conf（每行 key=value，# 与空行忽略）。
+# 读取 /data/adb/Tee-rs/props.conf（每行 key=value，# 与空行忽略）。
 # 特殊键 enabled=1 开启；其余行先 resetprop --delete 再 resetprop set，
 # 保证读取者看不到原始值。无 resetprop 或无配置文件则跳过。
 #
@@ -34,7 +38,7 @@ sleep 3
 #   once 仅处理 once: 前缀条目
 #   loop 仅处理非 once: 前缀条目（主循环轮询用）
 apply_props() {
-    local conf="$FKTEE_DIR/props.conf"
+    local conf="$TEERS_DIR/props.conf"
     [ -f "$conf" ] || return 0
     command -v resetprop >/dev/null 2>&1 || return 0
     local mode="${1:-all}"
@@ -80,9 +84,9 @@ apply_props() {
 }
 
 # ---------- USB 调试开关 (config-driven) ----------
-# 读取 /data/adb/fktee/usb.conf 的 adb_enabled=1/0，通过 settings 持久化。
+# 读取 /data/adb/Tee-rs/usb.conf 的 adb_enabled=1/0，通过 settings 持久化。
 apply_usb() {
-    local conf="$FKTEE_DIR/usb.conf"
+    local conf="$TEERS_DIR/usb.conf"
     [ -f "$conf" ] || return 0
     local adb=1
     while IFS= read -r line; do
@@ -128,19 +132,19 @@ sleep 2
 # restart.injector -> restart injector only
 while true; do
     # restart.all: kill both, watchdogs will respawn them
-    if [ -f "$FKTEE_DIR/restart.all" ]; then
-        rm -f "$FKTEE_DIR/restart.all"
+    if [ -f "$TEERS_DIR/restart.all" ]; then
+        rm -f "$TEERS_DIR/restart.all"
         kill_pidfile "$PID_FKTEE"
         kill_pidfile "$PID_INJECTOR"
     fi
 
-    if [ -f "$FKTEE_DIR/restart.fktee" ]; then
-        rm -f "$FKTEE_DIR/restart.fktee"
+    if [ -f "$TEERS_DIR/restart.fktee" ]; then
+        rm -f "$TEERS_DIR/restart.fktee"
         kill_pidfile "$PID_FKTEE"
     fi
 
-    if [ -f "$FKTEE_DIR/restart.injector" ]; then
-        rm -f "$FKTEE_DIR/restart.injector"
+    if [ -f "$TEERS_DIR/restart.injector" ]; then
+        rm -f "$TEERS_DIR/restart.injector"
         kill_pidfile "$PID_INJECTOR"
     fi
 

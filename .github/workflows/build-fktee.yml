@@ -49,6 +49,9 @@ jobs:
             cargo ndk -t $arch build --release -p fktee-injector
             cargo ndk -t $arch build --release -p fktee-daemon
             cargo ndk -t $arch build --release -p certgen
+            # fktee-hal：KeyMint HAL 替换骨架（方案 A）。当前未接进启动，
+            # 但构建以验证 AIDL 编译链，并产出二进制便于真机手动测试路由。
+            cargo ndk -t $arch build --release -p fktee-hal
           done
 
       - name: Setup Node
@@ -73,10 +76,13 @@ jobs:
           #   libcertgen.so 只导出 JNI 符号、没有 entry，用它当 payload 会导致
           #   injector 远程 dlsym("entry") 返回 NULL 注入必然失败。
           cp target/aarch64-linux-android/release/libinject_payload.so module/libs/arm64-v8a/injector.payload
+          # fktee-hal（方案 A 骨架，真机手动路由测试用）
+          cp target/aarch64-linux-android/release/fktee-hal     module/libs/arm64-v8a/fktee-hal
           # x86_64
           cp target/x86_64-linux-android/release/inject             module/libs/x86_64/inject
           cp target/x86_64-linux-android/release/fktee              module/libs/x86_64/fktee
           cp target/x86_64-linux-android/release/libinject_payload.so module/libs/x86_64/injector.payload
+          cp target/x86_64-linux-android/release/fktee-hal          module/libs/x86_64/fktee-hal
           cd module && zip -r ../output/FKTee-rs-v0.1.0.zip . -x '*.git*'
 
       - uses: actions/upload-artifact@v4

@@ -9,8 +9,11 @@ binder ioctl 拦截，让所有应用的 key attestation 证书链由本模块 k
 
 ## 工作原理
 
-与传统「修改 framework.jar / smali patch」方案不同，FKTee-rs 不动系统框架，
-而是在运行时注入 `keystore2` 进程，Hook 其 binder 事务：
+FKTee-rs 有两条实现路径：
+
+### 当前路径：ptrace 注入（已可用）
+
+在运行时注入 `keystore2` 进程，Hook 其 binder 事务：
 
 ```
 App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 真实证书
@@ -21,6 +24,27 @@ App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 
   PLT hook `ioctl` 拦截 `BINDER_WRITE_READ` 中的事务。
 - `daemon`（fktee）：常驻后端，管理 keybox、响应配置热更新、UID→包名黑名单豁免。
 - `certgen`：按 keybox.xml 生成 EC/RSA 证书链（库形式被 daemon 调用）。
+
+> 局限：ptrace 会留下 TracerPid 痕迹，可被反作弊枚举检测。
+
+### 目标路径：KeyMint HAL 替换（方案 A，开发中）
+
+不注入任何进程，把自己注册成 KeyMint HAL service，让 keystore2 主动路由过来：
+
+```
+App → keystore2 → binder → [我们的 HAL] ─┬─ attestKey: 用 keybox 伪造证书链
+                                           └─ 其余事务: 透传给真 HAL
+```
+
+- `hal`（fktee-hal）：用 `rsbinder` + `rsbinder-aidl` 注册为
+  `android.hardware.security.keymint.IKeyMintDevice/default`。
+- 不碰目标进程内存——无 TracerPid、无 dlopen、无 PLT 修改痕迹。
+- 走“代理 + 选择性拦截”：非 attestation 事务透传真 HAL，仅伪造涉证方法。
+
+> 当前 `crates/hal` 为骨架（仅 `getHardwareInfo` + 注册样板），**未接进开机启动**。
+> 可用前提：vendoring AOSP 完整 KeyMint AIDL（带 VintfStability 版本/hash）、
+> 实现代理转发、放开 sepolicy。详见 [crates/hal/src/main.rs](crates/hal/src/main.rs)
+> 顶部架构注释。未完成前 ptrace 路径仍是唯一可用实现。
 
 ### 全局 Hook + 黑名单
 
@@ -41,7 +65,7 @@ App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 
 
 1. 从 [Releases](../../releases) 下载 `FKTee-rs-vX.X.X.zip`。
 2. 在 Magisk / KSU / APatch 中刷入模块，重启。
-3.（可选）替换真实 keybox：把你的 `keybox.xml` 放到 `/data/adb/fktee/keybox.xml`，
+3.（可选）替换真实 keybox：把你的 `keybox.xml` 放到 `/data/adb/Tee-rs/keybox.xml`，
    权限 `0600`。模块自带的 `module/keybox.xml` 是 AOSP 测试模板，无法通过 STRONG。
 4. 在 KSU 管理器打开 WebUI 配置。
 
@@ -49,7 +73,7 @@ App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 
 
 ## 配置文件
 
-均在 `/data/adb/fktee/` 下，开机由 `customize.sh` 拷贝模板，之后由 WebUI 维护：
+均在 `/data/adb/Tee-rs/` 下，开机由 `customize.sh` 拷贝模板，之后由 WebUI 维护：
 
 | 文件 | 作用 |
 |------|------|
@@ -98,9 +122,10 @@ CI（`.github/workflows/build-fktee.yml`）在推送到 `main` 时自动构建�
 
 ```
 crates/
-  injector/   # ptrace 注入 + binder ioctl hook（inject + inject_payload.so）
+  injector/   # ptrace 注入 + binder ioctl hook（inject + inject_payload.so）— 当前可用
   daemon/     # fktee 常驻后端 + keybox 管理 + 黑名单豁免
   certgen/    # 证书链生成库
+  hal/        # KeyMint HAL 替换骨架（方案 A，rsbinder + AIDL）— 开发中
 module/       # Magisk 模块（service.sh / customize.sh / 配置模板）
 webui/        # KernelSU WebUI（Vite + TS + @material/web）
 ```

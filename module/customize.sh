@@ -45,18 +45,18 @@ else
 fi
 
 # ---------- Create config directory ----------
-FKTEE_DIR=/data/adb/fktee
-ui_print "- Creating config directory: $FKTEE_DIR"
-# 配置直接放在 $FKTEE_DIR 根目录（与 daemon/injector 读取的硬编码路径一致），
+TEERS_DIR=/data/adb/Tee-rs
+ui_print "- Creating config directory: $TEERS_DIR"
+# 配置直接放在 $TEERS_DIR 根目录（与 daemon/injector 读取的硬编码路径一致），
 # data/ 与 logs/ 仍为子目录。避免 config/ 子目录导致的路径不一致。
-mkdir -p "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
-chmod 0700 "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
+mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
+chmod 0700 "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
 
 # ---------- Copy default configs on first install ----------
 # copy_default <module_src> <fktee_dst>
 copy_default() {
     src="$MODPATH/$1"
-    dst="$FKTEE_DIR/$2"
+    dst="$TEERS_DIR/$2"
     if [ ! -f "$src" ]; then
         ui_print "! Missing template: $1"
         return 1

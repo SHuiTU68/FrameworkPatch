@@ -1,6 +1,6 @@
 // USB 调试开关面板
 //
-// 读写 /data/adb/fktee/usb.conf（service.sh apply_usb 读取），
+// 读写 /data/adb/Tee-rs/usb.conf（service.sh apply_usb 读取），
 // 同时直接调用 settings put global adb_enabled 实现「立即生效」，
 // 不必等 service.sh 下一轮轮询。
 import { escapeHtml, exec, showToast } from './cli';

@@ -5,12 +5,12 @@
 // 黑名单里的包名豁免。props.conf / usb.conf 由 service.sh 应用。
 import { readFile, writeFile } from './cli';
 
-export const INJECTOR_PATH = '/data/adb/fktee/injector.toml';
-export const CONFIG_PATH = '/data/adb/fktee/config.toml';
-export const KEYBOX_PATH = '/data/adb/fktee/keybox.xml';
-export const DENY_LIST_PATH = '/data/adb/fktee/deny.list';
-export const PROPS_CONF_PATH = '/data/adb/fktee/props.conf';
-export const USB_CONF_PATH = '/data/adb/fktee/usb.conf';
+export const INJECTOR_PATH = '/data/adb/Tee-rs/injector.toml';
+export const CONFIG_PATH = '/data/adb/Tee-rs/config.toml';
+export const KEYBOX_PATH = '/data/adb/Tee-rs/keybox.xml';
+export const DENY_LIST_PATH = '/data/adb/Tee-rs/deny.list';
+export const PROPS_CONF_PATH = '/data/adb/Tee-rs/props.conf';
+export const USB_CONF_PATH = '/data/adb/Tee-rs/usb.conf';
 
 export interface InjectorConfig {
   enabled: boolean; // 全局总开关

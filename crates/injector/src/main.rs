@@ -23,7 +23,7 @@ fn main() -> Result<()> {
             args[1].parse::<i32>()
                 .map_err(|e| anyhow::anyhow!("无效的 PID: {e}"))?,
             PathBuf::from(&args[2]),
-            PathBuf::from("/data/adb/fktee/injector.toml"),
+            PathBuf::from("/data/adb/Tee-rs/injector.toml"),
         ),
         4 => (
             args[1].parse::<i32>()
@@ -40,8 +40,8 @@ fn main() -> Result<()> {
             let pid = inject::find_process_by_name("keystore2")
                 .ok_or_else(|| anyhow::anyhow!("找不到 keystore2 进程"))?;
 
-            let payload = PathBuf::from("/data/adb/fktee/injector.payload");
-            let config = PathBuf::from("/data/adb/fktee/injector.toml");
+            let payload = PathBuf::from("/data/adb/Tee-rs/injector.payload");
+            let config = PathBuf::from("/data/adb/Tee-rs/injector.toml");
 
             (pid, payload, config)
         }
@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     // 覆盖加载黑名单（deny.list，与 config_path 同目录）
     let deny_path = config_path
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("/data/adb/fktee"))
+        .unwrap_or_else(|| std::path::Path::new("/data/adb/Tee-rs"))
         .join("deny.list");
     cfg.load_deny_list(&deny_path);
 
