@@ -1,6 +1,6 @@
 # FrameworkPatch smali 适配报告
 
-由 `scripts/extract_smali.sh` 自动生成于 2026-07-31 20:13:17 UTC
+由 `scripts/extract_smali.sh` 自动生成于 2026-08-01 01:19:52 UTC
 
 ## 1. 设备信息
 
