@@ -128,11 +128,12 @@ pub fn inject_library(pid: i32, payload_path: &Path) -> Result<()> {
     }
     waitpid(target_pid, None).context("等待 attach 完成失败")?;
 
+    // do_inject 内部会在返回前（无论成功失败）恢复原始寄存器，
+    // 这里只需保证最后一定 detach，避免目标进程卡在 ptrace-stop。
     let result = do_inject(pid, payload_path);
 
-    // 无论成功失败都恢复寄存器并 detach
-    log::debug!("恢复寄存器并 detach");
-    let _ = restore_and_detach(target_pid);
+    log::debug!("detach pid={pid}");
+    let _ = detach(target_pid);
 
     result
 }
@@ -144,79 +145,90 @@ pub fn inject_library(_pid: i32, _payload_path: &Path) -> Result<()> {
 }
 
 /// 核心注入逻辑（在 ptrace attach 状态下执行）
+///
+/// 关键：在返回前（无论成功失败）必须用 [`ptrace_setregs`] 恢复原始寄存器，
+/// 否则 PTRACE_DETACH 后目标进程会从被改写的 PC（指向非可执行“安全返回地址”）
+/// 处继续执行，立即 SIGSEGV 崩溃。
 #[cfg(target_arch = "aarch64")]
 fn do_inject(pid: i32, payload_path: &Path) -> Result<()> {
-    // 1. 保存原始寄存器
-    let original_regs = ptrace_getregs(pid)
-        .context("读取寄存器失败")?;
+    // 1. 保存原始寄存器（退出前必须恢复）
+    let original_regs = ptrace_getregs(pid).context("读取寄存器失败")?;
     log::debug!("原始 PC=0x{:x}", original_regs.pc);
 
-    // 2. 扫描目标进程的内存映射，找到关键库的基址
-    let maps = parse_proc_maps(pid)?;
-    let libc_base = find_lib_base(&maps, "libc.so")
-        .or_else(|| find_lib_base(&maps, "libc.a"))
-        .ok_or_else(|| anyhow::anyhow!("找不到 libc.so 基址"))?;
+    let result = (|| -> Result<()> {
+        // 2. 扫描目标进程的内存映射，找到关键库的基址
+        let maps = parse_proc_maps(pid)?;
+        let libc_base = find_lib_base(&maps, "libc.so")
+            .or_else(|| find_lib_base(&maps, "libc.a"))
+            .ok_or_else(|| anyhow::anyhow!("找不到 libc.so 基址"))?;
 
-    let linker_base = find_lib_base(&maps, "linker64")
-        .or_else(|| find_lib_base(&maps, "linker"))
-        .ok_or_else(|| anyhow::anyhow!("找不到 linker 基址"))?;
+        let linker_base = find_lib_base(&maps, "linker64")
+            .or_else(|| find_lib_base(&maps, "linker"))
+            .ok_or_else(|| anyhow::anyhow!("找不到 linker 基址"))?;
 
-    log::debug!("libc base=0x{:x}, linker base=0x{:x}", libc_base, linker_base);
+        log::debug!("libc base=0x{:x}, linker base=0x{:x}", libc_base, linker_base);
 
-    // 3. 确保 payload 文件存在且可读
-    if !payload_path.exists() {
-        bail!("payload 不存在: {}", payload_path.display());
+        // 3. 确保 payload 文件存在且可读
+        if !payload_path.exists() {
+            bail!("payload 不存在: {}", payload_path.display());
+        }
+
+        // 4. 打开 payload 的 fd
+        let payload_cstr = CString::new(payload_path.to_string_lossy().as_bytes())
+            .context("payload 路径转 CString 失败")?;
+
+        // 5. 远程调用 android_dlopen_ext 加载 payload
+        //    先找到 android_dlopen_ext 的地址
+        //    android_dlopen_ext 在 libdl.so 中，但实际由 linker 实现
+        let dlopen_ext_addr = find_remote_symbol(pid, &maps, "android_dlopen_ext")
+            .or_else(|| find_remote_symbol(pid, &maps, "dlopen"))
+            .ok_or_else(|| anyhow::anyhow!("找不到 android_dlopen_ext/dlopen 符号"))?;
+
+        log::debug!("android_dlopen_ext addr=0x{:x}", dlopen_ext_addr);
+
+        // 6. 远程调用 android_dlopen_ext(payload_path, RTLD_NOW, &extinfo)
+        //    extinfo 包含 ANDROID_DLEXT_USE_LIBRARY_FD 标志
+        //    使用 SCM_RIGHTS 传 fd，避免目标进程需要文件读权限
+        let handle = remote_dlopen_ext(
+            pid,
+            dlopen_ext_addr,
+            &payload_cstr,
+            libc_base,
+        ).context("远程 dlopen_ext 失败")?;
+
+        if handle.is_null() {
+            bail!("android_dlopen_ext 返回 NULL，加载 payload 失败");
+        }
+
+        log::info!("payload 加载成功，handle=0x{:x}", handle as usize);
+
+        // 7. 远程调用 dlsym(handle, "entry") 找到入口符号
+        let dlsym_addr = find_remote_symbol(pid, &maps, "dlsym")
+            .ok_or_else(|| anyhow::anyhow!("找不到 dlsym 符号"))?;
+
+        let entry_name = CString::new("entry").unwrap();
+        let entry_addr = remote_dlsym(pid, dlsym_addr, handle, &entry_name, libc_base)
+            .context("远程 dlsym 失败")?;
+
+        if entry_addr.is_null() {
+            bail!("dlsym 返回 NULL，找不到 entry 符号");
+        }
+
+        log::info!("entry 符号地址=0x{:x}", entry_addr as usize);
+
+        // 8. 远程调用 entry(handle) 完成 hook 安装
+        remote_call_void(pid, entry_addr as u64, handle as u64, libc_base)
+            .context("远程调用 entry() 失败")?;
+
+        log::info!("entry() 调用完成");
+        Ok(())
+    })();
+
+    // 无论上面成功还是失败，都恢复原始寄存器，确保 detach 后目标进程能正常继续
+    if let Err(e) = ptrace_setregs(pid, &original_regs) {
+        log::warn!("恢复原始寄存器失败: {e}");
     }
-
-    // 4. 打开 payload 的 fd
-    let payload_cstr = CString::new(payload_path.to_string_lossy().as_bytes())
-        .context("payload 路径转 CString 失败")?;
-
-    // 5. 远程调用 android_dlopen_ext 加载 payload
-    //    先找到 android_dlopen_ext 的地址
-    //    android_dlopen_ext 在 libdl.so 中，但实际由 linker 实现
-    let dlopen_ext_addr = find_remote_symbol(pid, &maps, "android_dlopen_ext")
-        .or_else(|| find_remote_symbol(pid, &maps, "dlopen"))
-        .ok_or_else(|| anyhow::anyhow!("找不到 android_dlopen_ext/dlopen 符号"))?;
-
-    log::debug!("android_dlopen_ext addr=0x{:x}", dlopen_ext_addr);
-
-    // 6. 远程调用 android_dlopen_ext(payload_path, RTLD_NOW, &extinfo)
-    //    extinfo 包含 ANDROID_DLEXT_USE_LIBRARY_FD 标志
-    //    使用 SCM_RIGHTS 传 fd，避免目标进程需要文件读权限
-    let handle = remote_dlopen_ext(
-        pid,
-        dlopen_ext_addr,
-        &payload_cstr,
-        libc_base,
-    ).context("远程 dlopen_ext 失败")?;
-
-    if handle.is_null() {
-        bail!("android_dlopen_ext 返回 NULL，加载 payload 失败");
-    }
-
-    log::info!("payload 加载成功，handle=0x{:x}", handle as usize);
-
-    // 7. 远程调用 dlsym(handle, "entry") 找到入口符号
-    let dlsym_addr = find_remote_symbol(pid, &maps, "dlsym")
-        .ok_or_else(|| anyhow::anyhow!("找不到 dlsym 符号"))?;
-
-    let entry_name = CString::new("entry").unwrap();
-    let entry_addr = remote_dlsym(pid, dlsym_addr, handle, &entry_name, libc_base)
-        .context("远程 dlsym 失败")?;
-
-    if entry_addr.is_null() {
-        bail!("dlsym 返回 NULL，找不到 entry 符号");
-    }
-
-    log::info!("entry 符号地址=0x{:x}", entry_addr as usize);
-
-    // 8. 远程调用 entry(handle) 完成 hook 安装
-    remote_call_void(pid, entry_addr as u64, handle as u64, libc_base)
-        .context("远程调用 entry() 失败")?;
-
-    log::info!("entry() 调用完成");
-    Ok(())
+    result
 }
 
 /// 解析 /proc/<pid>/maps
@@ -345,8 +357,11 @@ fn find_remote_symbol(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64>
 
 /// 远程调用 android_dlopen_ext(path, flags, &extinfo)
 /// 使用 SCM_RIGHTS fd 传递避免文件权限问题
+///
+/// `_libc_base` 当前未使用（路径方式 dlopen 不需要 mmap 远程内存），
+/// 保留参数位以兼容未来 SCM_RIGHTS fd 传递实现。
 #[cfg(target_arch = "aarch64")]
-fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, libc_base: u64) -> Result<*mut std::ffi::c_void> {
+fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base: u64) -> Result<*mut std::ffi::c_void> {
     log::debug!("远程 android_dlopen_ext(\"{}\")", path.to_str().unwrap_or("?"));
 
     // 简化实现：直接用路径方式 dlopen（不使用 fd 传递）
@@ -359,9 +374,8 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, libc_base: 
     let path_bytes = path.as_bytes_with_nul();
     let path_len = path_bytes.len();
 
-    // 找到 mmap 在远程的地址
+    // 用于查找安全返回地址的 maps（路径方式 dlopen 不需要 mmap 远程内存）
     let maps = parse_proc_maps(pid)?;
-    let libc_entry = maps.iter().find(|m| m.pathname.contains("libc.so")).cloned();
 
     // 在远程栈上写入路径
     let regs = ptrace_getregs(pid)?;
@@ -416,8 +430,10 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, libc_base: 
 }
 
 /// 远程调用 dlsym(handle, name)
+///
+/// `_libc_base` 当前未使用，保留参数位以兼容未来扩展。
 #[cfg(target_arch = "aarch64")]
-fn remote_dlsym(pid: i32, dlsym_addr: u64, handle: *mut std::ffi::c_void, name: &CString, libc_base: u64) -> Result<*mut std::ffi::c_void> {
+fn remote_dlsym(pid: i32, dlsym_addr: u64, handle: *mut std::ffi::c_void, name: &CString, _libc_base: u64) -> Result<*mut std::ffi::c_void> {
     let target_pid = Pid::from_raw(pid);
     let maps = parse_proc_maps(pid)?;
 
@@ -464,6 +480,8 @@ fn remote_dlsym(pid: i32, dlsym_addr: u64, handle: *mut std::ffi::c_void, name: 
 }
 
 /// 远程调用无返回值函数 f(handle)
+///
+/// `_libc_base` 当前未使用，保留参数位以兼容未来扩展。
 #[cfg(target_arch = "aarch64")]
 fn remote_call_void(pid: i32, func_addr: u64, arg0: u64, _libc_base: u64) -> Result<()> {
     let target_pid = Pid::from_raw(pid);
@@ -488,10 +506,11 @@ fn remote_call_void(pid: i32, func_addr: u64, arg0: u64, _libc_base: u64) -> Res
     if ret == -1 {
         bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
     }
-    waitpid(target_pid, None)?;
 
-    // 检查是否异常
-    let status = nix::sys::wait::waitpid(target_pid, None);
+    // 等待远程调用返回（执行到 LR 即非可执行“安全返回地址”时 SIGSEGV 停下）。
+    // 注意：只能 waitpid 一次——目标进程已被本次 wait 接管并处于 stop 态，
+    // 再次 waitpid 会因为没有后续状态变化而永久阻塞（injector 挂死）。
+    let status = waitpid(target_pid, None)?;
     log::debug!("远程调用结果状态: {:?}", status);
 
     Ok(())
@@ -533,10 +552,12 @@ fn find_safe_return_addr(maps: &[MapEntry]) -> u64 {
         .unwrap_or(0)
 }
 
-/// 恢复原始寄存器并 detach
+/// 从目标进程 detach。
+///
+/// 寄存器恢复已在 [`do_inject`] 中完成，这里只负责 PTRACE_DETACH，
+/// 让目标进程从原始 PC 处正常继续执行。
 #[cfg(target_arch = "aarch64")]
-fn restore_and_detach(target_pid: Pid) -> Result<()> {
-    // 恢复原始寄存器已在调用者中处理
+fn detach(target_pid: Pid) -> Result<()> {
     let ret = unsafe {
         libc::ptrace(
             libc::PTRACE_DETACH,

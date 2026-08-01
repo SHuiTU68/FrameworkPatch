@@ -9,6 +9,10 @@
 //! 后续需要 vendor LSPlt 源码到 vendor/lsplt/ 并通过 build.rs 编译链接。
 //! 当前阶段：FFI 声明已就绪，hook 注册逻辑标注 TODO（需 LSPlt 编译集成）。
 
+// 本模块为 binder ioctl hook 的设计骨架。LSPlt 尚未 vendor，相关 FFI /
+// binder 结构体 / ioctl 常量当前均为占位声明，待 build.rs 集成 LSPlt 后启用。
+#![allow(dead_code)]
+
 use anyhow::Result;
 
 /// 后门 code（daemon 握手用）
@@ -25,9 +29,14 @@ const BR_TRANSACTION_SEC_CTX: u32 = _ior_br(b'r', 15, ());
 // LSPlt FFI 声明
 // LSPlt 是 C++ 库（https://github.com/LSPosed/LSPlt），
 // 后续通过 build.rs vendor 编译。当前为声明，调用处标注 TODO。
+//
+// 注意：暂不添加 `#[link(name = "lsplt", ...)]`——liblsplt.a 尚未 vendor，
+// 加上会导致链接器报 `unable to find library -llsplt`（CI 构建失败）。
+// 待 build.rs 集成 LSPlt 后再启用 link 属性。
 // ============================================================================
 
 #[allow(non_camel_case_types)]
+#[allow(dead_code)] // LSPlt 尚未 vendor，FFI 符号当前未调用，待集成后启用
 mod lsplt_ffi {
     use std::os::raw::{c_char, c_int, c_void};
 
@@ -37,7 +46,10 @@ mod lsplt_ffi {
 
     /// 注册 PLT hook
     /// 返回 0 成功，非 0 失败
-    #[link(name = "lsplt", kind = "static")]
+    //
+    // 故意不加 `#[link]`：符号当前未调用，加 link 属性会强制链接器寻找
+    // 不存在的 liblsplt.a。后续 vendor LSPlt 并在 build.rs 中链接后，
+    // 再恢复 `#[link(name = "lsplt", kind = "static")]`。
     extern "C" {
         pub fn lsplt_register_hook(
             lib_name: *const c_char,
@@ -138,8 +150,10 @@ pub extern "C" fn hooked_ioctl(_fd: i32, _request: u32, _arg: *mut std::ffi::c_v
 
 // ============================================================================
 // binder 结构体定义（与内核一致）
+// 当前为占位声明（hook 未实际启用），待 LSPlt vendor 后启用。
 // ============================================================================
 
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct BinderWriteRead {

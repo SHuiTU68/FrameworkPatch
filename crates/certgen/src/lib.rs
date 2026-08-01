@@ -497,21 +497,21 @@ mod jni_entry {
         device_info: JByteArray<'local>,
     ) -> anyhow::Result<Vec<u8>> {
         let keybox_xml = env
-            .convert_byte_array(keybox)
+            .convert_byte_array(&keybox)
             .map_err(|e| anyhow::anyhow!("read keybox: {e:?}"))?;
         let algorithm = String::from(
             env.get_string(&algorithm)
                 .map_err(|e| anyhow::anyhow!("read algorithm: {e:?}"))?,
         );
         let challenge = env
-            .convert_byte_array(challenge)
+            .convert_byte_array(&challenge)
             .map_err(|e| anyhow::anyhow!("read challenge: {e:?}"))?;
         let package_name = String::from(
             env.get_string(&package_name)
                 .map_err(|e| anyhow::anyhow!("read packageName: {e:?}"))?,
         );
         let device_bytes = env
-            .convert_byte_array(device_info)
+            .convert_byte_array(&device_info)
             .map_err(|e| anyhow::anyhow!("read deviceInfo: {e:?}"))?;
 
         let mut device = DeviceInfo::unpack(&device_bytes)?;
