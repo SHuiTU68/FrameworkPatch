@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-精确 patch framework smali，注入 FrameworkPatch 的 5 个 hook 点。
+精确 patch framework smali，注入 FrameworkPatch 的 3 个 hook 点。
 
 基于 ADAPT_REPORT.md 里 OnePlus PLC110 (Android 16 / SDK 36) 的真实 smali，
 按「锚点连续行匹配 + 在锚点后插入」的方式 patch，幂等（已 patch 则跳过）。
@@ -27,8 +27,6 @@ HOOK_MARKER = "Lcom/android/internal/util/framework/Android;"
 #   - engineGetCertificateChain: v2=leaf, v3=chain[], v4=0；.registers 11
 #   - newApplication(Class,Context): p1=context；.registers 3
 #   - newApplication(CL,String,Context): p3=context；.registers 5
-#   - get(String): p0=key, v0=native返回值；.registers 2
-#   - get(String,String): p0=key, p1=def, v0=native返回值；.registers 3
 PATCHES = [
     {
         "file": "android/security/keystore2/AndroidKeyStoreSpi.smali",
@@ -58,33 +56,6 @@ PATCHES = [
         "context_filter": "p3",  # 仅在该行包含 p3 时才匹配
         "insert": [
             '    invoke-static {p3}, Lcom/android/internal/util/framework/Android;->newApplication(Landroid/content/Context;)V',
-        ],
-    },
-    {
-        "file": "android/os/SystemProperties.smali",
-        "desc": "SystemProperties.get(String) — p0=key, v0=native返回值",
-        # 锚点：native_get(String) 调用 + 紧跟的 move-result-object v0
-        # 用 index 字面量匹配，不用正则（避免 () 元字符问题）
-        "anchor_literal": [
-            "invoke-static {p0}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;)Ljava/lang/String;",
-            "move-result-object v0",
-        ],
-        "insert": [
-            '    invoke-static {p0, v0}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;',
-            '    move-result-object v0',
-        ],
-    },
-    {
-        "file": "android/os/SystemProperties.smali",
-        "desc": "SystemProperties.get(String, String) — p0=key, p1=def, v0=native返回值",
-        # 锚点：native_get(String, String) 调用 + 紧跟的 move-result-object v0
-        "anchor_literal": [
-            "invoke-static {p0, p1}, Landroid/os/SystemProperties;->native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-            "move-result-object v0",
-        ],
-        "insert": [
-            '    invoke-static {p0, p1, v0}, Lcom/android/internal/util/framework/Android;->systemPropertiesGet(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;',
-            '    move-result-object v0',
         ],
     },
 ]

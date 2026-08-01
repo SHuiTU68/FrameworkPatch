@@ -2,7 +2,6 @@ package com.android.internal.util.framework;
 
 import android.app.Application;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.os.Build;
 import android.security.keystore.KeyProperties;
 import android.util.Log;
@@ -48,44 +47,78 @@ import java.util.Locale;
 @Obfuscate
 public final class Android {
     private static final String TAG = "chiteroman";
-    // EC/RSA 不再 final：keybox 解析延迟到首次证明调用，避免 <clinit> 把重活挂到 SystemProperties.get 热路径
-    private static PEMKeyPair EC, RSA;
-    private static final ASN1ObjectIdentifier OID = new ASN1ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17");
-    private static final List<Certificate> EC_CERTS = new ArrayList<>();
-    private static final List<Certificate> RSA_CERTS = new ArrayList<>();
     private static volatile boolean isGmsUnstable = false;
-    private static volatile boolean spoofEnabled = false;
-    // keybox 懒加载状态：<clinit> 不解析，首次证明调用时 ensureKeyboxInit()
-    private static volatile boolean keyboxReady = false;
-    private static volatile boolean keyboxFailed = false;
-
-    // === 性能缓存（避免每次证明调用重复构造昂贵对象） ===
-    private static CertificateFactory certificateFactory;
-    private static X509CertificateHolder EC_ROOT_HOLDER;
-    private static X509CertificateHolder RSA_ROOT_HOLDER;
-    private static final JcaX509CertificateConverter CERT_CONVERTER = new JcaX509CertificateConverter();
-    private static final JcaPEMKeyConverter KEY_CONVERTER = new JcaPEMKeyConverter();
 
     // 设备指纹候选表。索引由编译期 -PactiveProfile=N 决定（见 ProfileConfig）。
     private static final int ACTIVE_PROFILE = ProfileConfig.ACTIVE_PROFILE;
     private static final List<HashMap<String, String>> PROFILES = new ArrayList<>();
 
-    // prop 级隐藏映射表（在 spoofEnabled 进程内对 SystemProperties.get 生效）。
-    // 当前仅两项：sys.oem_unlock_allowed / ro.boot.verifiedbootstate。
-    private static final HashMap<String, String> PROP_SPOOF = new HashMap<>();
+    /**
+     * BouncyCastle 懒加载 holder。
+     *
+     * 关键设计：Android.<clinit> 不引用 BCHolder，因此 JVM 不会在 Android 类初始化时
+     * 触发 BCHolder.<clinit>。只有 attestation 方法（certificate / certificateChain /
+     * engineGetCertificateChain）首次调用时才会访问 BCHolder.xxx，此时才加载 BouncyCastle。
+     *
+     * 背景：frameworkpatch.dex 在 boot classpath，Instrumentation.newApplication 被 hook
+     * 后，每个进程启动都会触发 Android.<clinit>。若 <clinit> 内有 BouncyCastle 类引用，
+     * 会导致百毫秒级重活或 ExceptionInInitializerError，直接卡死系统进程
+     * （负一屏卡死 → system_server watchdog → 重启即此症状）。
+     */
+    private static final class BCHolder {
+        static final ASN1ObjectIdentifier OID = new ASN1ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17");
+        static final CertificateFactory certificateFactory;
+        static final JcaX509CertificateConverter CERT_CONVERTER = new JcaX509CertificateConverter();
+        static final JcaPEMKeyConverter KEY_CONVERTER = new JcaPEMKeyConverter();
+        static PEMKeyPair EC, RSA;
+        static final List<Certificate> EC_CERTS = new ArrayList<>();
+        static final List<Certificate> RSA_CERTS = new ArrayList<>();
+        static X509CertificateHolder EC_ROOT_HOLDER;
+        static X509CertificateHolder RSA_ROOT_HOLDER;
+        static volatile boolean ready = false;
+        static volatile boolean failed = false;
 
-    // contains 逻辑映射表（原值包含某子串时替换为新值）。当前为空，保留表结构供 spoofProp 兼容。
-    private static final HashMap<String, String[]> PROP_CONTAINS = new HashMap<>();
+        static {
+            try {
+                EC = parseKeyPair(Keybox.EC.PRIVATE_KEY);
+                for (String c : Keybox.EC.CERTIFICATES) EC_CERTS.add(parseCert(c));
+
+                RSA = parseKeyPair(Keybox.RSA.PRIVATE_KEY);
+                for (String c : Keybox.RSA.CERTIFICATES) RSA_CERTS.add(parseCert(c));
+
+                EC_ROOT_HOLDER = new X509CertificateHolder(EC_CERTS.get(0).getEncoded());
+                RSA_ROOT_HOLDER = new X509CertificateHolder(RSA_CERTS.get(0).getEncoded());
+                certificateFactory = CertificateFactory.getInstance("X.509");
+                ready = true;
+            } catch (Throwable t) {
+                Log.e("chiteroman", "keybox init failed: " + t);
+                failed = true;
+                // 不 throw：类在 boot classpath，<clinit> 抛异常会让调用方进程崩溃
+            }
+        }
+
+        private static PEMKeyPair parseKeyPair(String key) throws Throwable {
+            try (PEMParser parser = new PEMParser(new StringReader(key))) {
+                return (PEMKeyPair) parser.readObject();
+            }
+        }
+
+        private static Certificate parseCert(String cert) throws Throwable {
+            PemObject pemObject;
+            try (PemReader reader = new PemReader(new StringReader(cert))) {
+                pemObject = reader.readPemObject();
+            }
+            return CERT_CONVERTER.getCertificate(new X509CertificateHolder(pemObject.getContent()));
+        }
+    }
 
     static {
         // Profile 0 — OnePlus Ace 5 至尊版 (PLC110, Android 16)
-        // fingerprint 格式 brand/device/product = OnePlus/PLC110/OP60EDL1
         PROFILES.add(buildProfile(
                 "OnePlus", "OnePlus", "PLC110", "OP60EDL1", "PLC110",
                 "OnePlus/PLC110/OP60EDL1:16/BP2A.250605.015/V.1be4275_8cb9c6_8ac72d:user/release-keys",
                 "16", "BP2A.250605.015", "V.1be4275_8cb9c6_8ac72d",
                 "2025-06-05", "user", "release-keys",
-                // BOARD/BOOTLOADER/HARDWARE 留空（initDeviceProps 跳过空值，避免写入错误值与 fingerprint 不一致）
                 "",  // BOARD
                 "",  // BOOTLOADER
                 "",  // HARDWARE
@@ -107,69 +140,6 @@ public final class Android {
                 "", "", "",
                 "", "", "",
                 "", "", "", "", ""));
-
-        // === prop 级隐藏（精简为仅两项）===
-        PROP_SPOOF.put("sys.oem_unlock_allowed", "0");
-        PROP_SPOOF.put("ro.boot.verifiedbootstate", "green");
-
-        // 设备相关 prop 占位（按 ACTIVE_PROFILE 填充，见 initDeviceProps）
-        PROP_SPOOF.put("ro.boot.bootloader", "");
-        PROP_SPOOF.put("ro.boot.hardware", "");
-        PROP_SPOOF.put("ro.boot.hardware.sku", "");
-        PROP_SPOOF.put("ro.product.bootloader", "");
-
-        // prop contains 隐藏已按需求精简，保留空表不破坏 spoofProp 逻辑
-
-        // keybox（EC/RSA 私钥 + 证书链 + CertificateFactory）不在 <clinit> 解析：
-        // BouncyCastle 解析是百毫秒级重活，且任何异常都会让 <clinit> 抛 ExceptionInInitializerError，
-        // 而 SystemProperties.get 被 hook 后每个进程首次读 prop 都会触发本类 <clinit>，
-        // 直接导致全系统进程崩溃/卡死（负一屏卡死后重启即此症状）。
-        // 改为首次证明调用时 ensureKeyboxInit() 懒加载，失败仅置标志、不 throw，调用方降级返回原值。
-        initDeviceProps();
-    }
-
-    /** 懒加载 keybox：仅在 certificate / certificateChain / engineGetCertificateChain 首次调用时执行。 */
-    private static synchronized void ensureKeyboxInit() {
-        if (keyboxReady || keyboxFailed) return;
-        try {
-            EC = parseKeyPair(Keybox.EC.PRIVATE_KEY);
-            for (String c : Keybox.EC.CERTIFICATES) EC_CERTS.add(parseCert(c));
-
-            RSA = parseKeyPair(Keybox.RSA.PRIVATE_KEY);
-            for (String c : Keybox.RSA.CERTIFICATES) RSA_CERTS.add(parseCert(c));
-
-            // 预计算根证书 Holder，避免每次证明调用重复解析
-            EC_ROOT_HOLDER = new X509CertificateHolder(EC_CERTS.get(0).getEncoded());
-            RSA_ROOT_HOLDER = new X509CertificateHolder(RSA_CERTS.get(0).getEncoded());
-            certificateFactory = CertificateFactory.getInstance("X.509");
-            keyboxReady = true;
-        } catch (Throwable t) {
-            Log.e(TAG, "keybox init failed: " + t);
-            keyboxFailed = true;
-            // 不 throw：类在 boot classpath，<clinit> 抛异常会让全系统 SystemProperties.get 崩溃
-        }
-    }
-
-    /** 按当前 profile 回填设备相关 prop（bootloader/hardware 等）。 */
-    private static void initDeviceProps() {
-        try {
-            HashMap<String, String> p = PROFILES.get(ACTIVE_PROFILE);
-            String bootloader = p.get("BOOTLOADER");
-            String hardware = p.get("HARDWARE");
-            String board = p.get("BOARD");
-            if (bootloader != null && !bootloader.isEmpty()) {
-                PROP_SPOOF.put("ro.boot.bootloader", bootloader);
-                PROP_SPOOF.put("ro.product.bootloader", bootloader);
-            }
-            if (hardware != null && !hardware.isEmpty()) {
-                PROP_SPOOF.put("ro.boot.hardware", hardware);
-            }
-            if (board != null && !board.isEmpty()) {
-                PROP_SPOOF.put("ro.product.board", board);
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, t.toString());
-        }
     }
 
     private static HashMap<String, String> buildProfile(
@@ -198,37 +168,22 @@ public final class Android {
         return m;
     }
 
-    private static PEMKeyPair parseKeyPair(String key) throws Throwable {
-        try (PEMParser parser = new PEMParser(new StringReader(key))) {
-            return (PEMKeyPair) parser.readObject();
-        }
-    }
-
-    private static Certificate parseCert(String cert) throws Throwable {
-        PemObject pemObject;
-        try (PemReader reader = new PemReader(new StringReader(cert))) {
-            pemObject = reader.readPemObject();
-        }
-        return CERT_CONVERTER.getCertificate(new X509CertificateHolder(pemObject.getContent()));
-    }
-
     public static byte[] certificateChain(byte[] bytes) {
         if (bytes == null) return null;
-        if (!keyboxReady) ensureKeyboxInit();
-        if (keyboxFailed) return bytes;
+        if (BCHolder.failed) return bytes;
         try {
-            LinkedList<Certificate> certificates = new LinkedList<>(certificateFactory.generateCertificates(new ByteArrayInputStream(bytes)));
+            LinkedList<Certificate> certificates = new LinkedList<>(BCHolder.certificateFactory.generateCertificates(new ByteArrayInputStream(bytes)));
 
             X509Certificate x509Certificate = (X509Certificate) certificates.getFirst();
 
             ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
 
             if (KeyProperties.KEY_ALGORITHM_EC.equals(x509Certificate.getPublicKey().getAlgorithm())) {
-                for (Certificate c : EC_CERTS) {
+                for (Certificate c : BCHolder.EC_CERTS) {
                     byteArrayOutputStream.write(c.getEncoded());
                 }
             } else {
-                for (Certificate c : RSA_CERTS) {
+                for (Certificate c : BCHolder.RSA_CERTS) {
                     byteArrayOutputStream.write(c.getEncoded());
                 }
             }
@@ -243,16 +198,15 @@ public final class Android {
 
     public static byte[] certificate(byte[] bytes) {
         if (bytes == null) return null;
-        if (!keyboxReady) ensureKeyboxInit();
-        if (keyboxFailed) return bytes;
+        if (BCHolder.failed) return bytes;
         try {
             X509CertificateHolder holder = new X509CertificateHolder(bytes);
 
             if (!"CN=Android Keystore Key".equals(holder.getSubject().toString())) return bytes;
 
-            X509Certificate leaf = CERT_CONVERTER.getCertificate(holder);
+            X509Certificate leaf = BCHolder.CERT_CONVERTER.getCertificate(holder);
 
-            Extension ext = holder.getExtension(OID);
+            Extension ext = holder.getExtension(BCHolder.OID);
 
             if (ext == null) return bytes;
 
@@ -270,21 +224,21 @@ public final class Android {
 
             ASN1OctetString hackedSeqOctets = new DEROctetString(hackedSeq);
 
-            Extension hackedExt = new Extension(OID, false, hackedSeqOctets);
+            Extension hackedExt = new Extension(BCHolder.OID, false, hackedSeqOctets);
 
             X509v3CertificateBuilder builder;
             ContentSigner signer;
 
             if (!isGmsUnstable && KeyProperties.KEY_ALGORITHM_EC.equals(leaf.getPublicKey().getAlgorithm())) {
-                builder = new X509v3CertificateBuilder(EC_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), EC.getPublicKeyInfo());
-                signer = new JcaContentSignerBuilder(leaf.getSigAlgName()).build(KEY_CONVERTER.getPrivateKey(EC.getPrivateKeyInfo()));
+                builder = new X509v3CertificateBuilder(BCHolder.EC_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), BCHolder.EC.getPublicKeyInfo());
+                signer = new JcaContentSignerBuilder(leaf.getSigAlgName()).build(BCHolder.KEY_CONVERTER.getPrivateKey(BCHolder.EC.getPrivateKeyInfo()));
             } else {
-                builder = new X509v3CertificateBuilder(RSA_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), RSA.getPublicKeyInfo());
-                signer = new JcaContentSignerBuilder("SHA256withRSA").build(KEY_CONVERTER.getPrivateKey(RSA.getPrivateKeyInfo()));
+                builder = new X509v3CertificateBuilder(BCHolder.RSA_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), BCHolder.RSA.getPublicKeyInfo());
+                signer = new JcaContentSignerBuilder("SHA256withRSA").build(BCHolder.KEY_CONVERTER.getPrivateKey(BCHolder.RSA.getPrivateKeyInfo()));
             }
 
             for (ASN1ObjectIdentifier extensionOID : holder.getExtensions().getExtensionOIDs()) {
-                if (OID.getId().equals(extensionOID.getId())) continue;
+                if (BCHolder.OID.getId().equals(extensionOID.getId())) continue;
                 builder.addExtension(holder.getExtension(extensionOID));
             }
 
@@ -301,16 +255,15 @@ public final class Android {
     public static Certificate[] engineGetCertificateChain(Certificate[] caList) {
         if (caList == null) return null;
         if (caList.length < 4) return caList;
-        if (!keyboxReady) ensureKeyboxInit();
-        if (keyboxFailed) return caList;
+        if (BCHolder.failed) return caList;
         try {
             X509CertificateHolder holder = new X509CertificateHolder(caList[0].getEncoded());
 
             if (!"CN=Android Keystore Key".equals(holder.getSubject().toString())) return caList;
 
-            X509Certificate leaf = CERT_CONVERTER.getCertificate(holder);
+            X509Certificate leaf = BCHolder.CERT_CONVERTER.getCertificate(holder);
 
-            Extension ext = holder.getExtension(OID);
+            Extension ext = holder.getExtension(BCHolder.OID);
 
             if (ext == null) return caList;
 
@@ -328,7 +281,7 @@ public final class Android {
 
             ASN1OctetString hackedSeqOctets = new DEROctetString(hackedSeq);
 
-            Extension hackedExt = new Extension(OID, false, hackedSeqOctets);
+            Extension hackedExt = new Extension(BCHolder.OID, false, hackedSeqOctets);
 
             X509v3CertificateBuilder builder;
             ContentSigner signer;
@@ -336,23 +289,23 @@ public final class Android {
             LinkedList<Certificate> certs;
 
             if (!isGmsUnstable && KeyProperties.KEY_ALGORITHM_EC.equals(leaf.getPublicKey().getAlgorithm())) {
-                certs = new LinkedList<>(EC_CERTS);
-                builder = new X509v3CertificateBuilder(EC_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), EC.getPublicKeyInfo());
-                signer = new JcaContentSignerBuilder(leaf.getSigAlgName()).build(KEY_CONVERTER.getPrivateKey(EC.getPrivateKeyInfo()));
+                certs = new LinkedList<>(BCHolder.EC_CERTS);
+                builder = new X509v3CertificateBuilder(BCHolder.EC_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), BCHolder.EC.getPublicKeyInfo());
+                signer = new JcaContentSignerBuilder(leaf.getSigAlgName()).build(BCHolder.KEY_CONVERTER.getPrivateKey(BCHolder.EC.getPrivateKeyInfo()));
             } else {
-                certs = new LinkedList<>(RSA_CERTS);
-                builder = new X509v3CertificateBuilder(RSA_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), RSA.getPublicKeyInfo());
-                signer = new JcaContentSignerBuilder("SHA256withRSA").build(KEY_CONVERTER.getPrivateKey(RSA.getPrivateKeyInfo()));
+                certs = new LinkedList<>(BCHolder.RSA_CERTS);
+                builder = new X509v3CertificateBuilder(BCHolder.RSA_ROOT_HOLDER.getSubject(), holder.getSerialNumber(), holder.getNotBefore(), holder.getNotAfter(), holder.getSubject(), BCHolder.RSA.getPublicKeyInfo());
+                signer = new JcaContentSignerBuilder("SHA256withRSA").build(BCHolder.KEY_CONVERTER.getPrivateKey(BCHolder.RSA.getPrivateKeyInfo()));
             }
 
             for (ASN1ObjectIdentifier extensionOID : holder.getExtensions().getExtensionOIDs()) {
-                if (OID.getId().equals(extensionOID.getId())) continue;
+                if (BCHolder.OID.getId().equals(extensionOID.getId())) continue;
                 builder.addExtension(holder.getExtension(extensionOID));
             }
 
             builder.addExtension(hackedExt);
 
-            certs.addFirst(CERT_CONVERTER.getCertificate(builder.build(signer)));
+            certs.addFirst(BCHolder.CERT_CONVERTER.getCertificate(builder.build(signer)));
 
             return certs.toArray(Certificate[]::new);
 
@@ -423,7 +376,6 @@ public final class Android {
 
         if (packageName != null && processName != null && packageName.equals("com.google.android.gms") && processName.equals("com.google.android.gms.unstable")) {
             isGmsUnstable = true;
-            spoofEnabled = true;
             try {
                 HashMap<String, String> profile = PROFILES.get(ACTIVE_PROFILE);
                 if (profile.get("FINGERPRINT").isEmpty()) {
@@ -459,42 +411,5 @@ public final class Android {
      */
     public static boolean hasSystemFeature(boolean ret, String feature) {
         return ret;
-    }
-
-    /**
-     * SystemProperties.get(String) 后置 hook：返回原始值，或 spoof 表里的值。
-     * 仅在 spoofEnabled（GMS unstable 进程）生效，避免影响其他进程与性能。
-     *
-     * smali patch 点：android.os.SystemProperties.get(String) 在 native_get
-     * 返回后、return 前，调用本方法替换返回值。
-     */
-    public static String systemPropertiesGet(String key, String value) {
-        return spoofProp(key, value);
-    }
-
-    /**
-     * SystemProperties.get(String, String) 后置 hook：同上，带默认值。
-     */
-    public static String systemPropertiesGet(String key, String def, String value) {
-        return spoofProp(key, value);
-    }
-
-    /**
-     * 统一 prop 替换逻辑：
-     * 1. 精确匹配 PROP_SPOOF（如 ro.boot.flash.locked → 1）；
-     * 2. contains 匹配 PROP_CONTAINS（如 bootmode 含 recovery → unknown）；
-     * 3. 其余返回原值。
-     *
-     * 仅在 spoofEnabled 进程生效，否则零开销短路。
-     */
-    private static String spoofProp(String key, String value) {
-        if (!spoofEnabled || key == null || key.isEmpty()) return value;
-        String spoofed = PROP_SPOOF.get(key);
-        if (spoofed != null) return spoofed;
-        String[] contains = PROP_CONTAINS.get(key);
-        if (contains != null && value != null && value.contains(contains[0])) {
-            return contains[1];
-        }
-        return value;
     }
 }

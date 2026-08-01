@@ -5,7 +5,7 @@
 # 流程:
 #   1. 构建 baksmali + smali fat jar（从 google/smali 源码）
 #   2. baksmali 反编译 classes.dex 和 classes3.dex
-#   3. python3 patch_smali.py 注入 5 个 hook 点
+#   3. python3 patch_smali.py 注入 3 个 hook 点
 #   4. smali a 重新打包成 dex
 #   5. 组装新 framework.jar:
 #      - 用 patched dex 替换 classes.dex / classes3.dex
@@ -103,7 +103,6 @@ step "2. 确定需要 patch 的 dex"
 # ============================================================================
 # Instrumentation      → classes.dex
 # AndroidKeyStoreSpi   → classes3.dex
-# SystemProperties     → classes3.dex
 DEX_TO_PATCH="classes.dex classes3.dex"
 info "需要 patch 的 dex: $DEX_TO_PATCH"
 
@@ -136,7 +135,7 @@ info "运行 patch_smali.py..."
 python3 "$ROOT/scripts/patch_smali.py" \
     "$WORK/smali_classes" "$WORK/smali_classes3" \
     || die "patch 失败，smali 锚点未匹配（检查 smali 结构是否变化）"
-ok "5 个 hook 点注入完成"
+ok "3 个 hook 点注入完成"
 
 # ============================================================================
 step "5. smali a 重新打包成 dex"
@@ -265,7 +264,7 @@ name=FrameworkPatch (OnePlus PLC110)
 version=2.0
 versionCode=2
 author=FrameworkPatch CI
-description=Patch framework.jar to spoof BL lock / Verified Boot / Key Attestation. Hooks: AndroidKeyStoreSpi + Instrumentation + SystemProperties.
+description=Patch framework.jar to spoof Build fingerprint / Key Attestation. Hooks: AndroidKeyStoreSpi + Instrumentation.
 EOF
 
 # 把 patched framework.jar 放进模块（Magisk 会覆盖 /system/framework/framework.jar）
