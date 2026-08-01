@@ -67,6 +67,10 @@ function draw(container: HTMLElement): void {
         通过 <code>resetprop --delete</code> + <code>resetprop set</code> 覆盖系统属性，
         让 Play Integrity / 反作弊读到伪造的 verified boot 状态。需要 Magisk/KernelSU 提供的 resetprop。
       </p>
+      <p class="tip">
+        支持条件语法 <code>key~match=value</code>：仅当 <code>getprop(key)</code> 包含
+        <code>match</code> 时才覆盖（用于隐藏 recovery 启动模式等，避免误改正常值）。
+      </p>
 
       <h2 class="section-title">属性条目（key = value）</h2>
       <div class="cards">${rows || '<div class="hint">暂无属性条目</div>'}</div>
@@ -168,8 +172,22 @@ function bind(container: HTMLElement): void {
     }
     let ok = 0;
     for (const e of cfg.entries) {
-      const k = e.key.replace(/'/g, "'\\''");
-      const v = e.value.replace(/'/g, "'\\''");
+      let key = e.key;
+      const value = e.value;
+      // 支持 key~match=value：仅当 getprop(key) 包含 match 才覆盖
+      const tilde = key.indexOf('~');
+      if (tilde >= 0) {
+        const realKey = key.slice(0, tilde);
+        const match = key.slice(tilde + 1);
+        const cur = await exec(`getprop '${realKey.replace(/'/g, "'\\''")}' 2>/dev/null`);
+        if (!cur.stdout.includes(match)) {
+          ok++; // 当前值不匹配，无需修改，视为已满足
+          continue;
+        }
+        key = realKey;
+      }
+      const k = key.replace(/'/g, "'\\''");
+      const v = value.replace(/'/g, "'\\''");
       const r = await exec(
         `resetprop --delete '${k}' 2>/dev/null; resetprop '${k}' '${v}' 2>/dev/null; echo done`
       );

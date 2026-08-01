@@ -22,6 +22,8 @@ sleep 3
 # 读取 /data/adb/fktee/props.conf（每行 key=value，# 与空行忽略）。
 # 特殊键 enabled=1 开启；其余行先 resetprop --delete 再 resetprop set，
 # 保证读取者看不到原始值。无 resetprop 或无配置文件则跳过。
+# 支持条件语法 key~match=value：仅当 getprop(key) 包含 match 才覆盖
+# （对应 contains_reset_prop，避免把正常值误改，如 bootmode=normal）。
 apply_props() {
     local conf="$FKTEE_DIR/props.conf"
     [ -f "$conf" ] || return 0
@@ -34,11 +36,26 @@ apply_props() {
     done < "$conf"
     [ "$enabled" = "1" ] || return 0
 
+    local spec key val match cur
     while IFS= read -r line; do
         case "$line" in ''|\#*|enabled=*) continue;; esac
-        key=${line%%=*}; val=${line#*=}
-        resetprop --delete "$key" 2>/dev/null
-        resetprop "$key" "$val" 2>/dev/null
+        spec=${line%%=*}; val=${line#*=}
+        case "$spec" in
+            *~*)
+                key=${spec%%~*}; match=${spec#*~}
+                cur=$(getprop "$key" 2>/dev/null)
+                case "$cur" in
+                    *"$match"*)
+                        resetprop --delete "$key" 2>/dev/null
+                        resetprop "$key" "$val" 2>/dev/null
+                        ;;
+                esac
+                ;;
+            *)
+                resetprop --delete "$spec" 2>/dev/null
+                resetprop "$spec" "$val" 2>/dev/null
+                ;;
+        esac
     done < "$conf"
 }
 
