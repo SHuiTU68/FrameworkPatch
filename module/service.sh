@@ -22,12 +22,22 @@ sleep 3
 # 读取 /data/adb/fktee/props.conf（每行 key=value，# 与空行忽略）。
 # 特殊键 enabled=1 开启；其余行先 resetprop --delete 再 resetprop set，
 # 保证读取者看不到原始值。无 resetprop 或无配置文件则跳过。
-# 支持条件语法 key~match=value：仅当 getprop(key) 包含 match 才覆盖
-# （对应 contains_reset_prop，避免把正常值误改，如 bootmode=normal）。
+#
+# 支持两种行前缀语法：
+#   key~match=value    仅当 getprop(key) 包含 match 才覆盖（contains_reset_prop）
+#   once:key=value     仅在开机时执行一次，主循环轮询时跳过
+#                      （用于 sys.boot_completed=0 等“一次性”条目，
+#                       避免每 5s 把它持续压回 0 导致系统误判未开机）
+#
+# 用法: apply_props [all|once|loop]
+#   all  开机时用，处理全部条目（含 once:）— 缺省
+#   once 仅处理 once: 前缀条目
+#   loop 仅处理非 once: 前缀条目（主循环轮询用）
 apply_props() {
     local conf="$FKTEE_DIR/props.conf"
     [ -f "$conf" ] || return 0
     command -v resetprop >/dev/null 2>&1 || return 0
+    local mode="${1:-all}"
 
     local enabled=1
     while IFS= read -r line; do
@@ -36,10 +46,20 @@ apply_props() {
     done < "$conf"
     [ "$enabled" = "1" ] || return 0
 
-    local spec key val match cur
+    local spec key val match cur is_once
     while IFS= read -r line; do
         case "$line" in ''|\#*|enabled=*) continue;; esac
         spec=${line%%=*}; val=${line#*=}
+        is_once=0
+        case "$spec" in
+            once:*) is_once=1; spec=${spec#once:};;
+        esac
+        # 按模式过滤：once 模式只跑 once 条目；loop 模式只跑非 once 条目
+        case "$mode:$is_once" in
+            once:0) continue;;
+            loop:1) continue;;
+        esac
+        # ~ 条件语法：仅当 getprop(key) 含 match 才覆盖
         case "$spec" in
             *~*)
                 key=${spec%%~*}; match=${spec#*~}
@@ -73,7 +93,7 @@ apply_usb() {
     command -v settings >/dev/null 2>&1 && settings put global adb_enabled "$adb" 2>/dev/null
 }
 
-apply_props
+apply_props all   # 开机：处理全部条目（含 once: 一次性项）
 apply_usb
 
 # ---------- Helpers ----------
@@ -125,7 +145,8 @@ while true; do
     fi
 
     # Re-apply prop hiding & USB state periodically (some processes reset props)
-    apply_props
+    # loop 模式跳过 once: 条目，避免 sys.boot_completed 被持续压回 0
+    apply_props loop
     apply_usb
 
     sleep 5

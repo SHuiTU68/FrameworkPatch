@@ -71,6 +71,10 @@ function draw(container: HTMLElement): void {
         支持条件语法 <code>key~match=value</code>：仅当 <code>getprop(key)</code> 包含
         <code>match</code> 时才覆盖（用于隐藏 recovery 启动模式等，避免误改正常值）。
       </p>
+      <p class="tip">
+        支持 <code>once:</code> 前缀：该条目仅在开机时执行一次，主循环轮询时跳过
+        （用于 <code>sys.boot_completed=0</code> 等“一次性”项，避免持续压回导致系统误判未开机）。
+      </p>
 
       <h2 class="section-title">属性条目（key = value）</h2>
       <div class="cards">${rows || '<div class="hint">暂无属性条目</div>'}</div>
@@ -174,6 +178,10 @@ function bind(container: HTMLElement): void {
     for (const e of cfg.entries) {
       let key = e.key;
       const value = e.value;
+      // 去掉 once: 前缀（立即应用时按需执行一次）
+      if (key.startsWith('once:')) {
+        key = key.slice(5);
+      }
       // 支持 key~match=value：仅当 getprop(key) 包含 match 才覆盖
       const tilde = key.indexOf('~');
       if (tilde >= 0) {
