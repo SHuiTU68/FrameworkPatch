@@ -2,8 +2,13 @@
 //!
 //! 参考 OhMyKeymint / ForgeStore / TEESimulator-RS 的 hook 实现。
 //! 使用 LSPlt（C++ PLT hook 库）对 libbinder.so 的 ioctl 做 PLT hook，
-//! 拦截 BINDER_WRITE_READ 中的 BR_TRANSACTION 事务，
-//! 按 target 过滤规则改写/转发给 daemon 处理。
+//! 拦截 BINDER_WRITE_READ 中的 BR_TRANSACTION 事务，**全局**改写 / 转发给
+//! daemon 处理。
+//!
+//! **全局 hook 模型**：不再按调用方 uid / 包名做白名单过滤。因为 hook 点在
+//! keystore2 进程内部，所有 App 的 attestation 请求都汇聚于此，统一改写即可
+//! 让所有应用拿到由本模块 keybox 签发的伪造证书链。是否生效仅由
+//! `[hook].enabled` 全局开关决定（见 payload 读取的 injector.toml）。
 //!
 //! LSPlt 是 C++ 库，通过 FFI 调用。
 //! 后续需要 vendor LSPlt 源码到 vendor/lsplt/ 并通过 build.rs 编译链接。
@@ -103,14 +108,15 @@ pub fn init_hook() -> Result<()> {
 
 /// 被注入的 ioctl hook 函数
 ///
-/// 拦截 binder 事务：
+/// 拦截 binder 事务（全局，不按调用方过滤）：
 /// 1. 先调用原始 ioctl
 /// 2. 检查返回的 BR_TRANSACTION / BR_TRANSACTION_SEC_CTX
 /// 3. 解析 binder_transaction_data 获取 target.ptr / cookie / code
-/// 4. 按 target 过滤规则处理：
+/// 4. 全局处理（见 `[hook].enabled`）：
 ///    - BACKDOOR_CODE + uid==0 → 返回 g_interceptor binder（daemon 握手）
 ///    - uid==0 普通事务 → 把 sender_euid 从 0 改成 1000
-///    - 注册的目标 binder → 改写 target.ptr/cookie 到 g_stub
+///    - attestation 相关事务 → 改写 target.ptr/cookie 到 g_stub，由 daemon
+///      用 keybox 签发伪造证书链。所有调用方一视同仁，不做白名单判断。
 #[no_mangle]
 pub extern "C" fn hooked_ioctl(_fd: i32, _request: u32, _arg: *mut std::ffi::c_void) -> i32 {
     // 先调用原始 ioctl

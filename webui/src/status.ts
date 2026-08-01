@@ -1,12 +1,13 @@
-// 状态面板：daemon 运行状态、keystore2 注入状态、重启按钮
+// 状态面板：daemon 运行状态、keystore2 注入状态、全局开关、重启按钮
 import { exec, restartDaemon, escapeHtml, showToast } from './cli';
+import { readInjectorToml } from './config';
 
 interface StatusInfo {
   fkteePid: string;
   injectorPid: string;
   keystore2Pid: string;
   injected: boolean;
-  targetCount: number;
+  hookEnabled: boolean;
 }
 
 // 获取 pidof（取首个 pid）
@@ -18,22 +19,19 @@ async function pidOf(name: string): Promise<string> {
 
 // 采集状态
 async function fetchStatus(): Promise<StatusInfo> {
-  const [fkteePid, injectorPid, keystore2Pid, scoopRaw, injectRaw] = await Promise.all([
+  const [fkteePid, injectorPid, keystore2Pid, injectRaw, cfg] = await Promise.all([
     pidOf('fktee'),
     pidOf('fktee-injector'),
     pidOf('keystore2'),
-    exec(`cat /data/adb/fktee/injector.toml 2>/dev/null | grep -c '"'`),
     exec(`test -f /data/adb/fktee/injected && echo yes || echo no`),
+    readInjectorToml().catch(() => ({ enabled: false, keyboxPath: '' })),
   ]);
-  // 简单估算目标数量（双引号出现次数 / 2）
-  const n = parseInt(scoopRaw.stdout.trim(), 10);
-  const targetCount = isNaN(n) ? 0 : Math.floor(n / 2);
   return {
     fkteePid,
     injectorPid,
     keystore2Pid,
     injected: injectRaw.stdout.trim() === 'yes',
-    targetCount,
+    hookEnabled: cfg.enabled,
   };
 }
 
@@ -54,6 +52,8 @@ export async function renderStatus(container: HTMLElement): Promise<void> {
       <b class="${ok ? 'ok' : 'warn'}">${escapeHtml(value)}</b>
     </div>`;
 
+  const hookText = s.hookEnabled ? '已启用（全局，所有应用）' : '已禁用（透传）';
+
   container.innerHTML = `
     <div class="status">
       <h2 class="section-title">运行状态</h2>
@@ -62,7 +62,7 @@ export async function renderStatus(container: HTMLElement): Promise<void> {
         ${row('Injector', s.injectorPid ? `运行中 (PID ${s.injectorPid})` : '未运行', !!s.injectorPid)}
         ${row('Keystore2', s.keystore2Pid ? `PID ${s.keystore2Pid}` : '未运行', !!s.keystore2Pid)}
         ${row('注入状态', s.injected ? '已注入' : '未注入', s.injected)}
-        ${row('目标数量', String(s.targetCount), s.targetCount > 0)}
+        ${row('全局 Hook', hookText, s.hookEnabled)}
       </div>
 
       <h2 class="section-title">重启 Daemon</h2>
@@ -82,9 +82,10 @@ export async function renderStatus(container: HTMLElement): Promise<void> {
         <md-outlined-button id="refresh">
           <span class="material-symbols-outlined" slot="icon">refresh</span>
           刷新
-        </md-outlined-button>
+        </md-filled-button>
       </div>
       <p class="tip">重启通过向 <code>/data/adb/fktee/restart.*</code> 写入信号文件触发。</p>
+      <p class="tip">切换“全局”开关后需重启 Injector 才能让 keystore2 重新读取配置。</p>
     </div>
   `;
 

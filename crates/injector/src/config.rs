@@ -1,25 +1,45 @@
 //! injector.toml 配置解析
+//!
+//! **全局 hook 模型**：FKTee-rs 注入到 keystore2 后，所有走 keystore2 的
+//! attestation 请求一律用本模块的 keybox 签发伪造证书链——不再按应用白名单
+//! 过滤。本配置仅保留一个全局总开关 `[hook].enabled` 与各事务拦截开关。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::Path;
 
+/// injector 配置（全局）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InjectorConfig {
-    pub filter: FilterConfig,
+    #[serde(default)]
+    pub hook: HookConfig,
+    #[serde(default)]
     pub intercept: InterceptConfig,
 }
 
+/// 全局 hook 开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterConfig {
+pub struct HookConfig {
+    /// 全局总开关。
+    /// - `true`：所有应用的 keystore2 attestation 都用 keybox 伪造。
+    /// - `false`：hook 不生效，全部放行（透传原始事务）。
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub allow_unknown_package: bool,
-    pub block_android_package: bool,
-    pub scoop: Vec<String>,
-    pub deny_packages: Vec<String>,
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
+impl Default for HookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_enabled(),
+        }
+    }
+}
+
+/// 各事务拦截开关（默认全开）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptConfig {
     pub get_key_entry: bool,
@@ -31,31 +51,25 @@ pub struct InterceptConfig {
     pub grant: bool,
 }
 
+impl Default for InterceptConfig {
+    fn default() -> Self {
+        Self {
+            get_key_entry: true,
+            generate_key: true,
+            import_key: true,
+            create_operation: true,
+            delete_key: true,
+            list_entries: true,
+            grant: true,
+        }
+    }
+}
+
 impl Default for InjectorConfig {
     fn default() -> Self {
         Self {
-            filter: FilterConfig {
-                enabled: true,
-                allow_unknown_package: false,
-                block_android_package: true,
-                scoop: vec![
-                    "io.github.vvb2060.keyattestation".into(),
-                    "com.google.android.gsf".into(),
-                    "com.google.android.gms".into(),
-                    "com.android.vending".into(),
-                    "com.eltavine.duckdetector".into(),
-                ],
-                deny_packages: vec![],
-            },
-            intercept: InterceptConfig {
-                get_key_entry: true,
-                generate_key: true,
-                import_key: true,
-                create_operation: true,
-                delete_key: true,
-                list_entries: true,
-                grant: true,
-            },
+            hook: HookConfig::default(),
+            intercept: InterceptConfig::default(),
         }
     }
 }
@@ -69,30 +83,18 @@ impl InjectorConfig {
 
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)?;
-        log::info!("配置加载完成: scoop={} 个包", config.filter.scoop.len());
+        log::info!(
+            "配置加载完成: hook.enabled={} (全局模式，所有应用生效)",
+            config.hook.enabled
+        );
         Ok(config)
     }
 
-    /// 检查包名是否在 target 白名单中
-    pub fn is_target(&self, package: &str) -> bool {
-        if !self.filter.enabled {
-            return true;
-        }
-
-        if self.filter.block_android_package && package.starts_with("android") {
-            return false;
-        }
-
-        if self.filter.deny_packages.iter().any(|p| p == package) {
-            return false;
-        }
-
-        self.filter.scoop.iter().any(|p| p == package)
-    }
-
-    /// 获取 scoop 集合（用于快速查找）
-    pub fn scoop_set(&self) -> HashSet<&str> {
-        self.filter.scoop.iter().map(|s| s.as_str()).collect()
+    /// hook 是否生效。
+    ///
+    /// 全局模型下没有“目标应用”概念——要么对所有应用生效，要么完全不拦截。
+    pub fn is_active(&self) -> bool {
+        self.hook.enabled
     }
 }
 
@@ -103,24 +105,28 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = InjectorConfig::default();
-        assert!(cfg.filter.enabled);
-        assert!(cfg.filter.block_android_package);
-        assert!(cfg.is_target("com.google.android.gms"));
-        assert!(!cfg.is_target("android"));
-        assert!(!cfg.is_target("com.random.app"));
+        assert!(cfg.hook.enabled, "默认应为全局启用");
+        assert!(cfg.is_active());
     }
 
     #[test]
-    fn test_filter_disabled() {
+    fn test_disabled() {
         let mut cfg = InjectorConfig::default();
-        cfg.filter.enabled = false;
-        assert!(cfg.is_target("com.anything"));
+        cfg.hook.enabled = false;
+        assert!(!cfg.is_active());
     }
 
     #[test]
-    fn test_deny_list() {
-        let mut cfg = InjectorConfig::default();
-        cfg.filter.deny_packages.push("com.google.android.gms".into());
-        assert!(!cfg.is_target("com.google.android.gms"));
+    fn test_parse_global() {
+        let toml = r#"
+[hook]
+enabled = true
+[intercept]
+get_key_entry = false
+"#;
+        let cfg: InjectorConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.is_active());
+        assert!(!cfg.intercept.get_key_entry);
+        assert!(cfg.intercept.generate_key);
     }
 }

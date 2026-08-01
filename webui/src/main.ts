@@ -1,14 +1,14 @@
 // FKTee-rs KSU WebUI 主入口
 import '@material/web/all.js';
 import { fullScreen, toast } from 'kernelsu-alt';
-import { renderAppList } from './app_list';
+import { renderGlobal } from './global';
 import { renderKeybox } from './keybox';
 import { renderStatus } from './status';
 
-type Tab = 'apps' | 'keybox' | 'status';
+type Tab = 'global' | 'keybox' | 'status';
 
 const app = document.getElementById('app')!;
-let currentTab: Tab = 'apps';
+let currentTab: Tab = 'global';
 
 // 检查 WebView 版本 >= 120
 function checkWebViewVersion(): boolean {
@@ -127,9 +127,9 @@ function shell(): string {
       <div class="logo">F</div>
       <h1>FKTee-rs</h1>
     </div>
-    <p class="subtitle">Play Integrity 注入管理 · KernelSU WebUI</p>
+    <p class="subtitle">Play Integrity 全局密钥链 Hook · KernelSU WebUI</p>
     <div class="tabs">
-      ${tabBtn('apps', '应用')}
+      ${tabBtn('global', '全局')}
       ${tabBtn('keybox', 'Keybox')}
       ${tabBtn('status', '状态')}
     </div>
@@ -147,7 +147,7 @@ function switchTab(tab: Tab): void {
 // 渲染当前标签内容
 function renderContent(): void {
   const content = document.getElementById('content')!;
-  if (currentTab === 'apps') renderAppList(content);
+  if (currentTab === 'global') renderGlobal(content);
   else if (currentTab === 'keybox') renderKeybox(content);
   else renderStatus(content);
 }

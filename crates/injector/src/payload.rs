@@ -4,8 +4,10 @@
 //! entry() 函数会被远程调用。
 //! 它负责：
 //! 1. 初始化日志
-//! 2. 安装 binder ioctl hook（LSPlt）
-//! 3. 与 daemon 建立 RPC 通信
+//! 2. 读取 injector.toml 的 `[hook].enabled` 全局开关
+//! 3. 安装 binder ioctl hook（LSPlt）——**全局拦截**，所有走 keystore2 的
+//!    应用 attestation 请求都改写，不做应用白名单过滤
+//! 4. 与 daemon 建立 RPC 通信
 //!
 //! 注意：作为 cdylib，它需要内联 hook 模块的实现，
 //! 不能引用 bin crate 的模块。
@@ -26,13 +28,13 @@ pub extern "C" fn entry(_handle: *mut c_void) {
 
     log_info("FKTee-rs payload 已加载到 keystore2 进程");
 
-    // 安装 binder ioctl hook
+    // 安装 binder ioctl hook（全局：所有应用 attestation 都改写）
     if let Err(e) = init_hook() {
         log_error(&format!("hook 初始化失败: {e}"));
         return;
     }
 
-    log_info("FKTee-rs hook 安装完成，开始拦截 keystore2 事务");
+    log_info("FKTee-rs 全局 hook 安装完成，开始拦截所有 keystore2 attestation 事务");
 }
 
 /// 初始化日志（直接用 __android_log_print，不依赖 env_logger）

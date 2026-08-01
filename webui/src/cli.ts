@@ -1,19 +1,10 @@
 // KSU bridge 调用封装
-import { exec as ksuExec, listPackages as ksuListPackages, getPackagesInfo, toast } from 'kernelsu-alt';
+import { exec as ksuExec, toast } from 'kernelsu-alt';
 
 export interface ExecResult {
   errno: number;
   stdout: string;
   stderr: string;
-}
-
-export interface AppInfo {
-  packageName: string;
-  label: string;
-  versionName: string;
-  versionCode: number;
-  system: boolean;
-  enabled: boolean;
 }
 
 // HTML 转义，避免注入
@@ -62,25 +53,6 @@ export async function writeFile(path: string, content: string): Promise<void> {
   if (r.errno !== 0) {
     throw new Error(`写入失败 ${path}: ${r.stderr}`);
   }
-}
-
-// 列出全部已安装应用（listPackages + getPackagesInfo）
-export async function listApps(): Promise<AppInfo[]> {
-  const names = await ksuListPackages();
-  // 兼容部分实现返回字符串的情况
-  const list: string[] = Array.isArray(names)
-    ? names
-    : String(names || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  if (!list.length) return [];
-  const infos = await getPackagesInfo(list);
-  return (infos || []).map((p: any) => ({
-    packageName: p?.name || p?.packageName || '',
-    label: p?.label || p?.name || '',
-    versionName: p?.versionName || '',
-    versionCode: p?.versionCode || 0,
-    system: !!p?.system,
-    enabled: p?.enabled !== false,
-  }));
 }
 
 // 重启 daemon（touch restart 信号文件）

@@ -4,6 +4,8 @@
 //! 1. 定位 keystore2 进程
 //! 2. ptrace 远程 dlopen 注入 payload .so
 //! 3. 调用 payload 的 entry() 完成 binder ioctl hook 安装
+//!
+//! **全局 hook**：注入后所有走 keystore2 的应用都受影响，不再按应用白名单过滤。
 
 mod config;
 mod hook;
@@ -57,11 +59,15 @@ fn main() -> Result<()> {
 
     // 加载配置
     let cfg = config::InjectorConfig::load(&config_path)?;
-    log::info!("scoop 白名单: {} 个包", cfg.filter.scoop.len());
+    if cfg.is_active() {
+        log::info!("全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox");
+    } else {
+        log::warn!("全局 hook 已禁用：注入仅完成 hook 安装，但不会伪造任何事务");
+    }
 
     // 执行 ptrace 远程 dlopen 注入
     inject::inject_library(target_pid, &payload_path)?;
 
-    log::info!("注入完成，hook 已安装");
+    log::info!("注入完成，全局 hook 已安装");
     Ok(())
 }

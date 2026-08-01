@@ -28,7 +28,11 @@ fn main() -> Result<()> {
     let injector_cfg = config::InjectorConfig::load(&config_dir.join("injector.toml"))?;
 
     log::info!("后端模式: {:?}", cfg.backend.mode);
-    log::info!("scoop: {} 个包", injector_cfg.filter.scoop.len());
+    if injector_cfg.is_active() {
+        log::info!("全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox");
+    } else {
+        log::warn!("全局 hook 已禁用：所有事务透传，不伪造任何证书");
+    }
 
     // 加载 keybox
     let keybox_path = config_dir.join("keybox.xml");
