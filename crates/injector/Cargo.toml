@@ -1,0 +1,33 @@
+[package]
+name = "fktee-injector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "inject"
+path = "src/main.rs"
+
+[dependencies]
+nix = { workspace = true }
+# lsplt 通过 FFI 链接 vendored C++ LSPlt（见 build.rs）
+# 不使用 crates.io 的 lsplt crate
+serde = { workspace = true }
+toml = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+libc = "0.2"
+
+[lib]
+name = "inject_payload"
+crate-type = ["cdylib"]
+path = "src/payload.rs"
+
+# LSPlt C++ 库通过 build.rs 编译链接
+# 后续 vendor LSPlt 源码到 vendor/lsplt/ 后启用
+# [build-dependencies]
+# cc = "1.0"

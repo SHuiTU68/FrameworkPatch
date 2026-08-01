@@ -1,0 +1,20 @@
+[backend]
+mode = "injector"  # injector | hal
+
+[trust]
+verified_boot_state = "green"
+device_locked = true
+vb_key = "auto"    # auto | random | <hex>
+vb_hash = "auto"   # auto | random | <hex>
+security_patch = "auto"  # auto | latest | YYYY-MM-DD
+
+[crypto]
+root_kek_seed = ""
+kak_seed = ""
+shared_secret_seed = ""
+shared_secret_nonce = ""
+
+[log]
+level = "info"  # debug | info | warn | error
+to_kmsg = true   # true = kmsg (隐藏), false = logcat
+verbose = false

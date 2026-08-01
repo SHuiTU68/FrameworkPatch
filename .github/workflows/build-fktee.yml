@@ -1,0 +1,84 @@
+name: Build FKTee-rs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'module/**'
+      - 'webui/**'
+      - '.github/workflows/build-fktee.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup_ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Set NDK env
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          # 添加 NDK clang 到 PATH
+          echo "${{ steps.setup_ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust binaries (arm64)
+        run: |
+          cargo ndk -t arm64-v8a build --release -p fktee-injector
+          cargo ndk -t arm64-v8a build --release -p fktee-daemon
+
+      - name: Build certgen (cdylib)
+        run: cargo ndk -t arm64-v8a build --release -p certgen
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build WebUI
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package Magisk module
+        run: |
+          mkdir -p output
+          mkdir -p module/libs/arm64-v8a
+          cp target/aarch64-linux-android/release/inject module/libs/arm64-v8a/inject
+          cp target/aarch64-linux-android/release/fktee module/libs/arm64-v8a/fktee
+          cp target/aarch64-linux-android/release/libcertgen.so module/libs/arm64-v8a/libcertgen.so
+          # certgen.so 作为 payload
+          cp target/aarch64-linux-android/release/libcertgen.so module/libs/arm64-v8a/injector.payload
+          cd module && zip -r ../output/FKTee-rs-v0.1.0.zip . -x '*.git*'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FKTee-rs
+          path: output/
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0
+          files: output/*.zip

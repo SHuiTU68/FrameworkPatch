@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<!--
+  FKTee-rs Keybox template (AOSP test keybox format, EC + RSA dual chain).
+
+  This is a TEMPLATE using AOSP's public test keybox structure. Replace the
+  PEM bodies with a real device keybox before use. EC chain is P-256; RSA
+  chain is RSA-2048. Each chain ships a leaf + intermediate + root cert.
+
+  Reference format: hardware/interfaces/keymaster/*/support/ (AOSP).
+-->
+<keybox>
+    <KeyboxDeviceID>00000000-0000-0000-0000-000000000000</KeyboxDeviceID>
+
+    <!-- ============ ECDSA (P-256) chain ============ -->
+    <Key algorithm="ecdsa">
+        <PrivateKey format="pem">
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIN PLACEHOLDER FKTee-rs TEST EC P-256 PRIVATE KEY DO NOT USE IN
+PRODUCTION REPLACE WITH REAL DEVICE KEYBOX PRIVATE KEY oUqD2y9v
+-----END EC PRIVATE KEY-----
+        </PrivateKey>
+        <CertificateChain>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIBzTCCAXOgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFURUZLVGVlcnNBFAkEAAAA
+PLACEHOLDER FKTee-rs TEST EC LEAF CERTIFICATE DO NOT USE IN PRODUCTION
+REPLACE WITH REAL DEVICE KEYBOX LEAF CERTIFICATE MAoGCCqGSM49BAMC
+-----END CERTIFICATE-----
+            </Certificate>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIBzTCCAXOgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFDRUlOVEVSTUVESUFURUZL
+PLACEHOLDER FKTee-rs TEST EC INTERMEDIATE CERTIFICATE DO NOT USE IN
+PRODUCTION REPLACE WITH REAL DEVICE KEYBOX INTERMEDIATE CERT MAoG
+CCqGSM49BAMC
+-----END CERTIFICATE-----
+            </Certificate>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIBzTCCAXOgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFDRFJPT1RDQVRFVkVLVGVl
+PLACEHOLDER FKTee-rs TEST EC ROOT CERTIFICATE DO NOT USE IN PRODUCTION
+REPLACE WITH REAL DEVICE KEYBOX ROOT CERTIFICATE MAoGCCqGSM49BAMC
+-----END CERTIFICATE-----
+            </Certificate>
+        </CertificateChain>
+    </Key>
+
+    <!-- ============ RSA (RSA-2048) chain ============ -->
+    <Key algorithm="rsa">
+        <PrivateKey format="pem">
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA PLACEHOLDER FKTee-rs TEST RSA-2048 PRIVATE KEY DO NOT
+USE IN PRODUCTION REPLACE WITH REAL DEVICE KEYBOX PRIVATE KEY aBcDeF
+-----END RSA PRIVATE KEY-----
+        </PrivateKey>
+        <CertificateChain>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIDqTCCApGgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFDRUxFQUZWRUtUZWVyc0EU
+PLACEHOLDER FKTee-rs TEST RSA LEAF CERTIFICATE DO NOT USE IN PRODUCTION
+REPLACE WITH REAL DEVICE KEYBOX LEAF CERTIFICATE wKjYBgkqhkiG9w0BAQ
+-----END CERTIFICATE-----
+            </Certificate>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIDqTCCApGgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFDRUlOVEVSTUVESUFURUZL
+PLACEHOLDER FKTee-rs TEST RSA INTERMEDIATE CERTIFICATE DO NOT USE IN
+PRODUCTION REPLACE WITH REAL DEVICE KEYBOX INTERMEDIATE wKjYBgkq
+hkiG9w0BAQ
+-----END CERTIFICATE-----
+            </Certificate>
+            <Certificate format="pem">
+-----BEGIN CERTIFICATE-----
+MIIDqTCCApGgAwIBAgIUQZ9pQkFBREFDRUZBTUVQTEFDRFJPT1RDQVRFVkVLVGVl
+PLACEHOLDER FKTee-rs TEST RSA ROOT CERTIFICATE DO NOT USE IN PRODUCTION
+REPLACE WITH REAL DEVICE KEYBOX ROOT CERTIFICATE wKjYBgkqhkiG9w0BAQ
+-----END CERTIFICATE-----
+            </Certificate>
+        </CertificateChain>
+    </Key>
+</keybox>

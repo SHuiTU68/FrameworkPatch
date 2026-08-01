@@ -1,0 +1,7 @@
+id=fktee_rs
+name=FKTee-rs
+version=v0.1.0
+versionCode=1
+author=FKTee-rs Contributors
+description=Pure Rust keystore hook module (ptrace inject + binder ioctl hook)
+updateJson=https://raw.githubusercontent.com/SHuiTU68/FrameworkPatch/main/module/update.json

@@ -1,0 +1,24 @@
+[filter]
+enabled = true
+allow_unknown_package = false
+block_android_package = true
+
+# scoop 白名单：命中则拦截，其他放行
+scoop = [
+    "io.github.vvb2060.keyattestation",
+    "com.google.android.gsf",
+    "com.google.android.gms",
+    "com.android.vending",
+    "com.eltavine.duckdetector",
+]
+
+deny_packages = []
+
+[intercept]
+get_key_entry = true
+generate_key = true
+import_key = true
+create_operation = true
+delete_key = true
+list_entries = true
+grant = true

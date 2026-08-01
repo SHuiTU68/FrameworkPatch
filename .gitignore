@@ -1,24 +1,41 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# WebUI
+webui/node_modules/
+webui/dist/
+
+# IDE
+.idea/
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+.vscode/
+
+# Build artifacts
+/output/
+/module/libs/
+/module/webroot/*.js
+/module/webroot/*.css
+/module/webroot/*.html
+!/module/webroot/config.json
+!/module/webroot/icon.png
+
+# Device files
+device_input/
+release/
+report/
+
+# Old FrameworkPatch files
+*.dex
+*.dex.patched
+*.jar
+*.apk
+*.zip
+keybox.xml
+!module/keybox.xml
+!crates/*/keybox.xml
+
+# OS
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-
-# 真实 Keybox（含私钥，切勿提交）
-/keybox.xml
-
-# 构建产物
-/app/build
-/release
-/.gradle
-
+Thumbs.db

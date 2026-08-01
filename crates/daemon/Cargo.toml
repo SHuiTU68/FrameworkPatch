@@ -1,0 +1,29 @@
+[package]
+name = "fktee-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fktee"
+path = "src/main.rs"
+
+[dependencies]
+certgen = { path = "../certgen" }
+serde = { workspace = true }
+toml = { workspace = true }
+quick-xml = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+hotwatch = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+# rsbinder 用于 keystore2 RPC 通信
+# 注意：rsbinder 在 Android 上的支持有限，后续可能需要改用直接 binder ioctl
+# rsbinder = { workspace = true }
+
+# Android 平台相关（非 cargo.io，需 vendor 或替换）
+# 暂时用 libc 直接调用
+libc = "0.2"

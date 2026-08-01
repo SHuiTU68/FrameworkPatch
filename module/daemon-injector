@@ -1,0 +1,89 @@
+#!/system/bin/sh
+# daemon-injector - inject watchdog
+# Keeps the inject binary running AND ensures keystore2 stays injected.
+# If keystore2 is found but our lib is no longer in its maps, re-inject.
+# 15s cooldown debounce to avoid hammering a restarting keystore2.
+# Honors restart signal: /data/adb/fktee/restart.injector  (or restart.all)
+
+MODDIR=${0%/*}
+FKTEE_DIR=/data/adb/fktee
+PIDFILE="$FKTEE_DIR/data/injector.pid"
+ARCH=$(getprop ro.product.cpu.abi)
+BIN="$MODDIR/libs/$ARCH/inject"
+
+COOLDOWN=15        # seconds: wait after an inject attempt before retrying
+CHECK_INTERVAL=5   # seconds: how often to verify injection state
+# Marker name this injector leaves in keystore2 maps (adjust to real lib name)
+INJECT_MARKER="fktee"
+
+# ---------- Helpers ----------
+# Locate the keystore2 process id
+get_keystore_pid() {
+    for p in /proc/[0-9]*; do
+        pid=${p##*/}
+        # cmdline is null-separated; tr to space for grep
+        if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "keystore2"; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Is keystore2 currently running?
+keystore_alive() {
+    [ -n "$(get_keystore_pid)" ]
+}
+
+# Is keystore2 still carrying our injected lib?
+is_injected() {
+    pid=$(get_keystore_pid)
+    [ -z "$pid" ] && return 1
+    grep -q "$INJECT_MARKER" "/proc/$pid/maps" 2>/dev/null
+}
+
+is_injector_running() {
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+
+start_inject() {
+    [ -x "$BIN" ] || return 1
+    rm -f "$PIDFILE"
+    "$BIN" &
+    echo $! > "$PIDFILE"
+}
+
+# ---------- Main loop ----------
+while true; do
+    # Consume restart signals
+    if [ -f "$FKTEE_DIR/restart.injector" ] || [ -f "$FKTEE_DIR/restart.all" ]; then
+        [ -f "$FKTEE_DIR/restart.injector" ] && rm -f "$FKTEE_DIR/restart.injector"
+        if is_injector_running; then
+            kill "$(cat "$PIDFILE")" 2>/dev/null
+            rm -f "$PIDFILE"
+        fi
+        start_inject
+        sleep "$COOLDOWN"
+        continue
+    fi
+
+    # If injector process died, restart it
+    if ! is_injector_running; then
+        start_inject
+        sleep "$COOLDOWN"
+        continue
+    fi
+
+    # Verify keystore2 is still injected; re-inject if not
+    if keystore_alive; then
+        if ! is_injected; then
+            start_inject
+            sleep "$COOLDOWN"
+            continue
+        fi
+    fi
+
+    sleep "$CHECK_INTERVAL"
+done

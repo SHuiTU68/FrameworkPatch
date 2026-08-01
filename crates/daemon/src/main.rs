@@ -1,0 +1,85 @@
+//! FKTee-rs daemon
+//!
+//! 这是 FKTee-rs 的核心守护进程，负责：
+//! 1. 加载配置（config.toml / injector.toml / keybox.xml）
+//! 2. 管理证书生成（通过 certgen crate）
+//! 3. 与注入到 keystore2 的 payload 通信（通过 binder RPC）
+//! 4. 热配置（文件监听自动重载）
+//! 5. 被 injector daemon 启动，处理来自 keystore2 的拦截事务
+
+mod config;
+mod keybox;
+mod server;
+
+use anyhow::Result;
+use std::path::PathBuf;
+
+fn main() -> Result<()> {
+    env_logger::init();
+
+    log::info!("FKTee-rs daemon v{} 启动", env!("CARGO_PKG_VERSION"));
+    log::info!("PID={}", std::process::id());
+
+    // 配置目录
+    let config_dir = PathBuf::from("/data/adb/fktee");
+
+    // 加载配置
+    let cfg = config::DaemonConfig::load(&config_dir.join("config.toml"))?;
+    let injector_cfg = config::InjectorConfig::load(&config_dir.join("injector.toml"))?;
+
+    log::info!("后端模式: {:?}", cfg.backend.mode);
+    log::info!("scoop: {} 个包", injector_cfg.filter.scoop.len());
+
+    // 加载 keybox
+    let keybox_path = config_dir.join("keybox.xml");
+    let keybox = keybox::KeyboxManager::load(&keybox_path)?;
+    match &keybox {
+        Some(kb) => log::info!("keybox 已加载: EC={}, RSA={}", kb.has_ec(), kb.has_rsa()),
+        None => log::warn!("keybox 未加载，将使用 fallback 模式"),
+    }
+
+    // 初始化证书生成器
+    let certgen = certgen::CertGen::new();
+    log::info!("certgen 初始化完成");
+
+    // 启动热配置监听
+    let config_dir_clone = config_dir.clone();
+    std::thread::spawn(move || {
+        watch_config_changes(&config_dir_clone);
+    });
+
+    // 启动 RPC 服务器（监听来自 payload 的 binder 事务）
+    log::info!("启动 RPC 服务器...");
+    let mut server = server::RpcServer::new(cfg, injector_cfg, keybox, certgen);
+    server.run()?;
+
+    Ok(())
+}
+
+/// 监听配置文件变化，热重载
+fn watch_config_changes(config_dir: &PathBuf) {
+    use hotwatch::Hotwatch;
+
+    let mut watcher = match Hotwatch::new() {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("文件监听初始化失败: {e}");
+            return;
+        }
+    };
+
+    let watch_path = config_dir.clone();
+
+    let _ = watcher.watch(&watch_path, move |_event| {
+        log::info!("配置文件变化，准备热重载");
+        // TODO: 重新加载配置并通知 server 线程
+        // 这里发送信号给 server 线程触发重载
+    });
+
+    log::info!("配置热重载监听已启动: {}", config_dir.display());
+
+    // 保持线程存活
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}

@@ -1,0 +1,84 @@
+#!/system/bin/sh
+# daemon - fktee keystore backend watchdog
+# Keeps the fktee binary alive with exponential backoff (500ms -> 30s).
+# Honors restart signal file: /data/adb/fktee/restart.fktee  (or restart.all)
+
+MODDIR=${0%/*}
+FKTEE_DIR=/data/adb/fktee
+PIDFILE="$FKTEE_DIR/data/fktee.pid"
+ARCH=$(getprop ro.product.cpu.abi)
+BIN="$MODDIR/libs/$ARCH/fktee"
+
+# Backoff parameters (milliseconds)
+BACKOFF_MS=500
+MAX_BACKOFF_MS=30000
+RUN_CHECK_MS=500
+
+# Detect fractional sleep capability once (busybox/toybox support it)
+if sleep 0.1 2>/dev/null; then
+    HAS_FRACTIONAL_SLEEP=1
+else
+    HAS_FRACTIONAL_SLEEP=0
+fi
+
+# msleep <milliseconds>
+msleep() {
+    ms=$1
+    if [ "$HAS_FRACTIONAL_SLEEP" = "1" ]; then
+        secs=$(awk -v m="$ms" 'BEGIN{ printf "%.2f", m/1000 }')
+        sleep "$secs" 2>/dev/null
+    else
+        s=$(( (ms + 999) / 1000 ))
+        [ "$s" -lt 1 ] && s=1
+        sleep "$s" 2>/dev/null
+    fi
+}
+
+is_running() {
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+
+start_once() {
+    [ -x "$BIN" ] || return 1
+    rm -f "$PIDFILE"
+    "$BIN" &
+    echo $! > "$PIDFILE"
+}
+
+bump_backoff() {
+    BACKOFF_MS=$((BACKOFF_MS * 2))
+    [ "$BACKOFF_MS" -gt "$MAX_BACKOFF_MS" ] && BACKOFF_MS=$MAX_BACKOFF_MS
+}
+
+while true; do
+    # Consume restart signals
+    if [ -f "$FKTEE_DIR/restart.fktee" ] || [ -f "$FKTEE_DIR/restart.all" ]; then
+        [ -f "$FKTEE_DIR/restart.fktee" ] && rm -f "$FKTEE_DIR/restart.fktee"
+        if is_running; then
+            kill "$(cat "$PIDFILE")" 2>/dev/null
+            rm -f "$PIDFILE"
+        fi
+        BACKOFF_MS=500
+        # fallthrough: respawn immediately below
+    fi
+
+    if ! is_running; then
+        if start_once; then
+            msleep "$RUN_CHECK_MS"
+            if is_running; then
+                BACKOFF_MS=500
+            else
+                msleep "$BACKOFF_MS"
+                bump_backoff
+            fi
+        else
+            # Binary missing/exec failure
+            msleep "$BACKOFF_MS"
+            bump_backoff
+        fi
+    else
+        sleep 5
+    fi
+done

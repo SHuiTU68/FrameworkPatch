@@ -1,0 +1,24 @@
+# NDK linker 配置
+# 每个 Android target 指定 NDK clang 作为 linker（API level 29 = Android 10+）
+
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android29-clang"
+
+[target.armv7-linux-androideabi]
+linker = "armv7-linux-androideabi29-clang"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android29-clang"
+
+[target.i686-linux-android]
+linker = "i686-linux-android29-clang"
+
+# Android 不需要默认的 dylib 依赖
+[target.aarch64-linux-android.dependencies]
+
+[build]
+# 默认 target（CI 会覆盖）
+# target = "aarch64-linux-android"
+
+[env]
+# NDK 路径（CI 会设置 ANDROID_NDK_HOME）

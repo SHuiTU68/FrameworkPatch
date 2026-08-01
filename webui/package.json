@@ -1,0 +1,23 @@
+{
+  "name": "fktee-webui",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@material/web": "^2.0.0",
+    "kernelsu-alt": "^1.0.0",
+    "marked": "^14.0.0",
+    "asn1js": "^3.0.5",
+    "pkijs": "^2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vite": "^8.0.0",
+    "sass": "^1.77.0",
+    "@types/node": "^20.0.0"
+  }
+}
