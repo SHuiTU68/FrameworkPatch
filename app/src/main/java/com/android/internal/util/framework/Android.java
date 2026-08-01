@@ -48,12 +48,16 @@ import java.util.Locale;
 @Obfuscate
 public final class Android {
     private static final String TAG = "chiteroman";
-    private static final PEMKeyPair EC, RSA;
+    // EC/RSA 不再 final：keybox 解析延迟到首次证明调用，避免 <clinit> 把重活挂到 SystemProperties.get 热路径
+    private static PEMKeyPair EC, RSA;
     private static final ASN1ObjectIdentifier OID = new ASN1ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17");
     private static final List<Certificate> EC_CERTS = new ArrayList<>();
     private static final List<Certificate> RSA_CERTS = new ArrayList<>();
     private static volatile boolean isGmsUnstable = false;
     private static volatile boolean spoofEnabled = false;
+    // keybox 懒加载状态：<clinit> 不解析，首次证明调用时 ensureKeyboxInit()
+    private static volatile boolean keyboxReady = false;
+    private static volatile boolean keyboxFailed = false;
 
     // === 性能缓存（避免每次证明调用重复构造昂贵对象） ===
     private static CertificateFactory certificateFactory;
@@ -67,10 +71,10 @@ public final class Android {
     private static final List<HashMap<String, String>> PROFILES = new ArrayList<>();
 
     // prop 级隐藏映射表（在 spoofEnabled 进程内对 SystemProperties.get 生效）。
-    // 通用「已锁 + Verified Boot 完整」状态值，与设备无关。
+    // 当前仅两项：sys.oem_unlock_allowed / ro.boot.verifiedbootstate。
     private static final HashMap<String, String> PROP_SPOOF = new HashMap<>();
 
-    // contains 逻辑：原值包含某子串时替换为新值（如 bootmode 含 recovery → unknown）。
+    // contains 逻辑映射表（原值包含某子串时替换为新值）。当前为空，保留表结构供 spoofProp 兼容。
     private static final HashMap<String, String[]> PROP_CONTAINS = new HashMap<>();
 
     static {
@@ -104,45 +108,9 @@ public final class Android {
                 "", "", "",
                 "", "", "", "", ""));
 
-        // === Verified Boot / BL 锁状态（通用，已锁 + Verified）===
-        PROP_SPOOF.put("ro.boot.verifiedbootstate", "green");
-        PROP_SPOOF.put("ro.boot.flash.locked", "1");
-        PROP_SPOOF.put("ro.boot.vbmeta.device_state", "locked");
-        PROP_SPOOF.put("vendor.boot.vbmeta.device_state", "locked");
-        PROP_SPOOF.put("vendor.boot.verifiedbootstate", "green");
-        PROP_SPOOF.put("ro.boot.veritymode", "enforcing");
-        PROP_SPOOF.put("ro.boot.space.veritymode", "enforcing");
-
-        // === warranty / oem unlock（解锁痕迹）===
-        PROP_SPOOF.put("ro.boot.warranty_bit", "0");
-        PROP_SPOOF.put("ro.warranty_bit", "0");
-        PROP_SPOOF.put("ro.vendor.boot.warranty_bit", "0");
-        PROP_SPOOF.put("ro.vendor.warranty_bit", "0");
+        // === prop 级隐藏（精简为仅两项）===
         PROP_SPOOF.put("sys.oem_unlock_allowed", "0");
-
-        // === debuggable / secure / adb ===
-        PROP_SPOOF.put("ro.debuggable", "0");
-        PROP_SPOOF.put("ro.force.debuggable", "0");
-        PROP_SPOOF.put("ro.secure", "1");
-        PROP_SPOOF.put("ro.adb.secure", "1");
-        PROP_SPOOF.put("ro.boot.secure", "1");
-        PROP_SPOOF.put("ro.boot.cpuraw", "0");
-        PROP_SPOOF.put("ro.boot.cab_mask", "0");
-
-        // === build type / tags / selinux ===
-        PROP_SPOOF.put("ro.build.type", "user");
-        PROP_SPOOF.put("ro.build.tags", "release-keys");
-        PROP_SPOOF.put("ro.build.selinux", "1");
-
-        // === OEM 专用锁状态 prop（多品牌一并覆盖，非该品牌设备读取返回原值无副作用）===
-        PROP_SPOOF.put("ro.secureboot.lockstate", "locked");          // MIUI
-        PROP_SPOOF.put("ro.boot.realmebootstate", "green");           // Realme
-        PROP_SPOOF.put("ro.boot.realme.lockstate", "1");              // Realme
-        PROP_SPOOF.put("ro.boot.ftm_mode", "unknown");
-
-        // === 其他启动状态 ===
-        PROP_SPOOF.put("ro.boot.bootreason", "");
-        PROP_SPOOF.put("ro.boot.mode", "normal");
+        PROP_SPOOF.put("ro.boot.verifiedbootstate", "orange");
 
         // 设备相关 prop 占位（按 ACTIVE_PROFILE 填充，见 initDeviceProps）
         PROP_SPOOF.put("ro.boot.bootloader", "");
@@ -150,12 +118,19 @@ public final class Android {
         PROP_SPOOF.put("ro.boot.hardware.sku", "");
         PROP_SPOOF.put("ro.product.bootloader", "");
 
-        // === contains 逻辑：原值包含子串[0]时替换为[1] ===
-        // 隐藏从 recovery 启动（magisk recovery 模式痕迹）
-        PROP_CONTAINS.put("ro.bootmode", new String[]{"recovery", "unknown"});
-        PROP_CONTAINS.put("ro.boot.bootmode", new String[]{"recovery", "unknown"});
-        PROP_CONTAINS.put("vendor.boot.bootmode", new String[]{"recovery", "unknown"});
+        // prop contains 隐藏已按需求精简，保留空表不破坏 spoofProp 逻辑
 
+        // keybox（EC/RSA 私钥 + 证书链 + CertificateFactory）不在 <clinit> 解析：
+        // BouncyCastle 解析是百毫秒级重活，且任何异常都会让 <clinit> 抛 ExceptionInInitializerError，
+        // 而 SystemProperties.get 被 hook 后每个进程首次读 prop 都会触发本类 <clinit>，
+        // 直接导致全系统进程崩溃/卡死（负一屏卡死后重启即此症状）。
+        // 改为首次证明调用时 ensureKeyboxInit() 懒加载，失败仅置标志、不 throw，调用方降级返回原值。
+        initDeviceProps();
+    }
+
+    /** 懒加载 keybox：仅在 certificate / certificateChain / engineGetCertificateChain 首次调用时执行。 */
+    private static synchronized void ensureKeyboxInit() {
+        if (keyboxReady || keyboxFailed) return;
         try {
             EC = parseKeyPair(Keybox.EC.PRIVATE_KEY);
             for (String c : Keybox.EC.CERTIFICATES) EC_CERTS.add(parseCert(c));
@@ -167,12 +142,12 @@ public final class Android {
             EC_ROOT_HOLDER = new X509CertificateHolder(EC_CERTS.get(0).getEncoded());
             RSA_ROOT_HOLDER = new X509CertificateHolder(RSA_CERTS.get(0).getEncoded());
             certificateFactory = CertificateFactory.getInstance("X.509");
+            keyboxReady = true;
         } catch (Throwable t) {
-            Log.e(TAG, t.toString());
-            throw new RuntimeException(t);
+            Log.e(TAG, "keybox init failed: " + t);
+            keyboxFailed = true;
+            // 不 throw：类在 boot classpath，<clinit> 抛异常会让全系统 SystemProperties.get 崩溃
         }
-
-        initDeviceProps();
     }
 
     /** 按当前 profile 回填设备相关 prop（bootloader/hardware 等）。 */
@@ -239,6 +214,8 @@ public final class Android {
 
     public static byte[] certificateChain(byte[] bytes) {
         if (bytes == null) return null;
+        if (!keyboxReady) ensureKeyboxInit();
+        if (keyboxFailed) return bytes;
         try {
             LinkedList<Certificate> certificates = new LinkedList<>(certificateFactory.generateCertificates(new ByteArrayInputStream(bytes)));
 
@@ -266,6 +243,8 @@ public final class Android {
 
     public static byte[] certificate(byte[] bytes) {
         if (bytes == null) return null;
+        if (!keyboxReady) ensureKeyboxInit();
+        if (keyboxFailed) return bytes;
         try {
             X509CertificateHolder holder = new X509CertificateHolder(bytes);
 
@@ -322,6 +301,8 @@ public final class Android {
     public static Certificate[] engineGetCertificateChain(Certificate[] caList) {
         if (caList == null) return null;
         if (caList.length < 4) return caList;
+        if (!keyboxReady) ensureKeyboxInit();
+        if (keyboxFailed) return caList;
         try {
             X509CertificateHolder holder = new X509CertificateHolder(caList[0].getEncoded());
 
