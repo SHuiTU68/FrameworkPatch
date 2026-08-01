@@ -67,7 +67,10 @@ public final class Android {
      */
     private static final class BCHolder {
         static final ASN1ObjectIdentifier OID = new ASN1ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17");
-        static final CertificateFactory certificateFactory;
+        // 非 final：仅在 BCHolder.<clinit> try 路径赋值，catch 路径不赋值；
+        // javac 要求 blank static final 沿所有路径定赋，故去掉 final。
+        // 读取由 ready/failed 标志守卫，final 语义非必需。
+        static CertificateFactory certificateFactory;
         static final JcaX509CertificateConverter CERT_CONVERTER = new JcaX509CertificateConverter();
         static final JcaPEMKeyConverter KEY_CONVERTER = new JcaPEMKeyConverter();
         static PEMKeyPair EC, RSA;
