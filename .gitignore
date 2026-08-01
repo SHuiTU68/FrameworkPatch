@@ -1,7 +1,6 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # WebUI
 webui/node_modules/
@@ -15,26 +14,11 @@ webui/dist/
 # Build artifacts
 /output/
 /module/libs/
-/module/webroot/*.js
-/module/webroot/*.css
-/module/webroot/*.html
-!/module/webroot/config.json
-!/module/webroot/icon.png
+/module/webroot/assets/
 
-# Device files
-device_input/
-release/
-report/
-
-# Old FrameworkPatch files
-*.dex
-*.dex.patched
-*.jar
-*.apk
-*.zip
+# Keybox（私钥，绝不提交）
 keybox.xml
 !module/keybox.xml
-!crates/*/keybox.xml
 
 # OS
 .DS_Store

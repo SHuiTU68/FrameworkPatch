@@ -1,187 +1,113 @@
-# Framework Patch
-Modify framework.jar to build a valid certificate chain.
+# FKTee-rs
 
-> 适配 Android 15 / 16（compileSdk 35，AGP 8.7.3 / Gradle 8.9）。
-> Keybox 改为从 `keybox.xml` 自动生成；设备指纹支持 OnePlus Ace 5 至尊版 / Pixel 9 Pro XL + 自定义占位，CI 可选。
+Pure Rust 的 Android keystore2 全局 Hook 模块——通过 ptrace 注入 +
+binder ioctl 拦截，让所有应用的 key attestation 证书链由本模块 keybox 签发。
+配套 WebUI 提供全局开关、黑名单、prop 属性隐藏、USB 调试开关。
 
-## Requirements
-- Intermediate Windows and Linux knowledge.
-- Intermediate Java and Smali knowledge.
-- WSL (only in Windows).
-- Java 17.
-- 7zip.
+> 适配 Android 10+（SDK 29+），支持 arm64-v8a / x86_64。
+> 需要 Magisk / KernelSU / APatch 提供 root 与 `resetprop`。
 
-In GNU/Linux distro, install this packages (I use Ubuntu in WSL2):
+## 工作原理
+
+与传统「修改 framework.jar / smali patch」方案不同，FKTee-rs 不动系统框架，
+而是在运行时注入 `keystore2` 进程，Hook 其 binder 事务：
+
 ```
-sudo apt update
-sudo apt full-upgrade -y
-sudo apt install -y default-jdk zipalign
-```
-
-## Keybox 配置（重要）
-本项目的 `Keybox.java` 不再硬编码在源码里，而是由 Gradle 任务 `generateKeybox` 在编译时从 XML 自动生成。
-
-1. 准备你的 `keybox.xml`（硬件证明模块通用的格式，含 EC/RSA 私钥与证书链）。
-2. 把它放到**项目根目录**（与 `settings.gradle.kts` 同级）。
-3. 构建时会自动解析并生成 `Keybox.java`。
-
-- `keybox.xml` 已被 `.gitignore` 忽略，**不会被提交**，避免泄露私钥。
-- 若根目录没有 `keybox.xml`，会回退到 `keybox.xml.example`（仅测试密钥，无法通过 STRONG_INTEGRITY）。
-- 也可手动触发：`./gradlew generateKeybox`。
-
-`keybox.xml` 格式：
-```xml
-<?xml version="1.0"?>
-<Keybox>
-    <Key algorithm="ec">
-        <PrivateKey format="pem">-----BEGIN EC PRIVATE KEY----- ... -----END EC PRIVATE KEY-----</PrivateKey>
-        <CertificateChain>
-            <Certificate format="pem">-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----</Certificate>
-            <Certificate format="pem">-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----</Certificate>
-        </CertificateChain>
-    </Key>
-    <Key algorithm="rsa"> ... </Key>
-</Keybox>
+App ──binder──▶ keystore2 ──┬─[正常]──▶ TEE/Keymaster 真实证书
+                             └─[Hook]──▶ FKTee-rs 用 keybox 伪造证书链 ◀── App 读到
 ```
 
-## 设备指纹切换
-设备指纹由编译期参数 `-PactiveProfile=N` 决定（生成 `ProfileConfig.java` 注入），无需改源码：
-- `0` — OnePlus Ace 5 至尊版 / PLC110 (Android 16)（默认）
-- `1` — Pixel 9 Pro XL / komodo (Android 16)
-- `2` — 占位，在 [Android.java](app/src/main/java/com/android/internal/util/framework/Android.java) 的 `PROFILES` 填入你自己的指纹
+- `injector`：ptrace attach keystore2，远程 dlopen `inject_payload.so`，
+  PLT hook `ioctl` 拦截 `BINDER_WRITE_READ` 中的事务。
+- `daemon`（fktee）：常驻后端，管理 keybox、响应配置热更新、UID→包名黑名单豁免。
+- `certgen`：按 keybox.xml 生成 EC/RSA 证书链（库形式被 daemon 调用）。
 
-### 在 CI 中切换
-GitHub Actions 手动触发（`workflow_dispatch`）时，会出现 `profile` 下拉选项（0/1/2），选择后构建即用该指纹。push 触发默认用 `0`。
+### 全局 Hook + 黑名单
 
-本地构建示例：
+开启后**所有**走 keystore2 的应用 attestation 都用本模块 keybox 伪造，
+无需逐个勾选应用。`deny.list` 中的包名豁免，保留真实硬件证书（用于个别敏感 App）。
+
+黑名单豁免通过 `/data/system/packages.list` 把调用方 UID 反查到包名实现。
+
+## 功能
+
+- **全局 Hook**：一键开关，所有应用 attestation 伪造
+- **黑名单**：WebUI 勾选应用豁免（移植自 Tricky 的 app_list 卡片设计）
+- **prop 属性隐藏**：`resetprop` 覆盖 verified boot / debug / build 状态
+- **USB 调试开关**：配置驱动，即时生效
+- **WebUI**：KernelSU WebUI，6 个标签页（全局 / Keybox / 黑名单 / 属性 / USB / 状态）
+
+## 安装
+
+1. 从 [Releases](../../releases) 下载 `FKTee-rs-vX.X.X.zip`。
+2. 在 Magisk / KSU / APatch 中刷入模块，重启。
+3.（可选）替换真实 keybox：把你的 `keybox.xml` 放到 `/data/adb/fktee/keybox.xml`，
+   权限 `0600`。模块自带的 `module/keybox.xml` 是 AOSP 测试模板，无法通过 STRONG。
+4. 在 KSU 管理器打开 WebUI 配置。
+
+> 重启后 `service.sh` 自动启动 daemon 与 injector 看门狗，注入 keystore2。
+
+## 配置文件
+
+均在 `/data/adb/fktee/` 下，开机由 `customize.sh` 拷贝模板，之后由 WebUI 维护：
+
+| 文件 | 作用 |
+|------|------|
+| `injector.toml` | `[hook].enabled` 全局总开关 |
+| `deny.list` | 黑名单包名（每行一个，豁免伪造） |
+| `keybox.xml` | EC/RSA keybox（私钥，勿提交） |
+| `props.conf` | prop 属性隐藏清单 |
+| `usb.conf` | USB 调试开关（`adb_enabled=1/0`） |
+| `config.toml` | daemon 后端 / 日志配置 |
+
+### props.conf 格式
+
+```
+enabled=1                       # 总开关
+
+# 无条件覆盖（每轮轮询执行，防被系统重置）
+ro.boot.verifiedbootstate=green
+ro.boot.flash.locked=1
+
+# 条件覆盖：仅当 getprop(key) 含 match 才改（隐藏 recovery 模式，避免误改 normal）
+ro.bootmode~recovery=unknown
+
+# 一次性：仅开机执行一次，主循环 5s 轮询跳过
+once:sys.boot_completed=0
+```
+
+`once:` 与 `~` 可组合。完整默认清单见 [module/props.conf](module/props.conf)。
+
+## 构建
+
+需 Rust + Android NDK + Node：
+
 ```bash
-./gradlew :app:assembleRelease -PactiveProfile=1
+# Rust 二进制（arm64-v8a / x86_64）
+cargo ndk -t arm64-v8a build --release -p fktee-injector
+cargo ndk -t arm64-v8a build --release -p fktee-daemon
+cargo ndk -t arm64-v8a build --release -p certgen
+
+# WebUI（输出到 module/webroot/）
+cd webui && npm ci && npm run build
 ```
 
-## CI 自动构建
-`.github/workflows/build.yml` 在推送到 `main` 分支（或手动触发）时：
-1. 从仓库 secret `KEYBOX_XML`（如有配置）恢复真实 `keybox.xml`；
-2. 按 `profile` 输入（默认 0）选择设备指纹，构建 release APK，解出 `classes.dex`；
-3. 把 `release/`（含 `classes.dex`、`app-release.apk`、说明）**直接 commit 到 `main` 分支**（不提 PR）。
+CI（`.github/workflows/build-fktee.yml`）在推送到 `main` 时自动构建并发布。
+注意 payload 是 `libinject_payload.so`（导出 `entry()`），不是 `libcertgen.so`。
 
-配置真实密钥：仓库 Settings → Secrets and variables → Actions → 新增 `KEYBOX_XML`（整个 XML 文件内容）。
-未配置时使用测试密钥构建。
+## 项目结构
 
-## SystemRW
-To make system rw you can use @lebigmac scripts: https://systemrw.com/download.php
-
-For my vayu, I used this: https://mega.nz/file/TQ42WApL#ky3OzPwEKQeKrFGJYygqEr07zsidEqYAd7lSu9-ceEM
-
-FLASH IN CUSTOM RECOVERY.
-AFTER FLASHING; REBOOT TO RECOVERY AGAIN TO START MODIFYING SYSTEM.
-
-## Tutorial
-First, cd to a working (and clean) directory.
-
-Pull framework.jar from your device:
 ```
-adb pull /system/framework/framework.jar
+crates/
+  injector/   # ptrace 注入 + binder ioctl hook（inject + inject_payload.so）
+  daemon/     # fktee 常驻后端 + keybox 管理 + 黑名单豁免
+  certgen/    # 证书链生成库
+module/       # Magisk 模块（service.sh / customize.sh / 配置模板）
+webui/        # KernelSU WebUI（Vite + TS + @material/web）
 ```
 
-Now, compile [smali](https://github.com/google/smali):
-(Use WSL if you are in Windows)
-```
-git clone --depth=1 https://github.com/google/smali.git
-cd smali
-./gradlew build
-```
+## 许可
 
-Then pick smali and baksmali fatJars and paste to working dir.
-
-Using 7zip extract framework.jar to framework/ directory.
-
-Now using [jadx](https://github.com/skylot/jadx) open framework.jar and check these classes:
-- android.security.keystore2.AndroidKeyStoreSpi
-- android.app.Instrumentation
-
-You must check in where .dex they are, you can know by checking upper text in class declaration, something like this:
-```
-/* loaded from: classes3.dex */
-public class AndroidKeyStoreSpi extends KeyStoreSpi
-
-/* loaded from: classes.dex */
-public class Instrumentation 
-````
-
-Now using baksmali.jar, decompile that .dex files:
-```
-java -jar baksmali.jar d framework/classes3.dex -o classes3
-java -jar baksmali.jar d framework/classes.dex -o classes
-```
-
-After .dex files are decompiled, you must search in folders for this files and modify like this:
-
-- AndroidKeyStoreSpi.smali:
-
-Search for method "engineGetCertificateChain" and near the end should be a line like this:
-```
-const/4 v4, 0x0
-aput-object v2, v3, v4
-return-object v3
-```
-
-In this example:
-
-v2 -> leaf cert.
-v3 -> certificate chain.
-v4 -> 0, the position to insert the leaf cert in certificate chain.
-
-It may be different in your .smali file. Do not copy and paste...
-
-After aput operation, you must add this:
-```
-invoke-static {XX}, Lcom/android/internal/util/framework/Android;->engineGetCertificateChain([Ljava/security/cert/Certificate;)[Ljava/security/cert/Certificate;
-move-result-object XX
-```
-
-Replace XX with the leaf certificate register.
-
-So the final code (in this example) should be this:
-```
-const/4 v4, 0x0
-aput-object v2, v3, v4
-invoke-static {v3}, Lcom/android/internal/util/framework/Android;->engineGetCertificateChain([Ljava/security/cert/Certificate;)[Ljava/security/cert/Certificate;
-move-result-object v3
-return-object v3
-```
-
-- Instrumentation.smali:
-
-Search for "newApplication" methods and before the return operation, add this:
-```
-invoke-static {XX}, Lcom/android/internal/util/framework/Android;->newApplication(Landroid/content/Context;)V
-```
-
-Replace XX with the Context register.
-
-Now compile again the files:
-```
-java -jar smali.jar a -a {API_LEVEL} classes3 -o framework/classes3.dex
-java -jar smali.jar a -a {API_LEVEL} classes -o framework/classes.dex
-```
-
-Replace {API_LEVEL} with the Android version you are running (Android 15 = 35, Android 16 = 36).
-
-Then build the patch dex. 你不再需要手动改源码里的密钥——把你的 `keybox.xml` 放到项目根目录后：
-```
-./gradlew :app:assembleRelease
-```
-编译产物在 `app/build/outputs/apk/release/`，从中取出 `classes.dex`（也可直接用 CI 自动产出的 `release/classes.dex`）。
-
-Now add a number greater than the one that already exists in the framework/.
-
-For example, if the greatest number is classes5.dex, you must copy it as classes6.dex
-
-Using 7zip recompile as .zip all framework/ files without compression.
-
-After you have the framework.zip use zipalign:
-```
-zipalign -f -p -v -z 4 framework.zip framework.jar
-```
-
-Now move framework.jar to /system/framework, you can use Magisk module to replace it or mount /system as read-write and replace it.
+AGPL-3.0-or-later。注入器/hook 实现参考了 OhMyKeymint / ForgeStore /
+TEESimulator-RS 的思路，WebUI 应用列表卡片设计移植自 Tricky-Addon-Update-Target-List，
+在此致谢。

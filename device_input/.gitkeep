@@ -1,3 +1,0 @@
-# 把手机上 /system/framework/framework.jar 上传到此目录。
-# 上传后 CI 会自动触发，反编译并生成 ../report/ADAPT_REPORT.md
-# 可选：同时上传 device_info.txt（手机上执行 `su -c 'getprop > /sdcard/device_info.txt'`）
