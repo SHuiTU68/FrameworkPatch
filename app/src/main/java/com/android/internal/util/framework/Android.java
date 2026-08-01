@@ -110,7 +110,7 @@ public final class Android {
 
         // === prop 级隐藏（精简为仅两项）===
         PROP_SPOOF.put("sys.oem_unlock_allowed", "0");
-        PROP_SPOOF.put("ro.boot.verifiedbootstate", "orange");
+        PROP_SPOOF.put("ro.boot.verifiedbootstate", "green");
 
         // 设备相关 prop 占位（按 ACTIVE_PROFILE 填充，见 initDeviceProps）
         PROP_SPOOF.put("ro.boot.bootloader", "");
