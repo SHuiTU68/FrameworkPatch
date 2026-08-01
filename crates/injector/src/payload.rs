@@ -9,8 +9,12 @@
 //!    应用 attestation 请求都改写，不做应用白名单过滤
 //! 4. 与 daemon 建立 RPC 通信
 //!
-//! 注意：作为 cdylib，它需要内联 hook 模块的实现，
+//! 注意：作为 cdylib，它通过 `#[path]` 内联 hook 模块的实现，
 //! 不能引用 bin crate 的模块。
+
+// 复用 hook.rs 的实现（统一一份 hook 代码，避免 bin/lib 各持一份占位 stub）。
+#[path = "hook.rs"]
+mod hook;
 
 use std::ffi::c_void;
 use std::os::raw::c_int;
@@ -29,7 +33,7 @@ pub extern "C" fn entry(_handle: *mut c_void) {
     log_info("FKTee-rs payload 已加载到 keystore2 进程");
 
     // 安装 binder ioctl hook（全局：所有应用 attestation 都改写）
-    if let Err(e) = init_hook() {
+    if let Err(e) = hook::init_hook() {
         log_error(&format!("hook 初始化失败: {e}"));
         return;
     }
@@ -56,26 +60,24 @@ fn log_error(msg: &str) {
     }
 }
 
+// liblog 只在 Android 目标上存在。host 工具链（cargo test / clippy）没有 -llog，
+// 因此非 Android 平台提供一个空 stub，使本 crate 在 host 上也能编译/测试。
+#[cfg(target_os = "android")]
 #[link(name = "log")]
 extern "C" {
-    fn __android_log_print(prio: c_int, tag: *const std::os::raw::c_char, msg: *const std::os::raw::c_char) -> c_int;
+    fn __android_log_print(
+        prio: c_int,
+        tag: *const std::os::raw::c_char,
+        msg: *const std::os::raw::c_char,
+    ) -> c_int;
 }
 
-/// 初始化 binder ioctl hook
-///
-/// TODO: vendor LSPlt 后实现
-/// 当前为占位实现，不实际 hook
-fn init_hook() -> anyhow::Result<()> {
-    log_info("初始化 binder ioctl hook（占位实现）");
-    log_info("TODO: vendor LSPlt 后启用实际 hook");
-    Ok(())
-}
-
-/// 被注入的 ioctl hook 函数（LSPlt 注册后替换 libbinder.so 的 ioctl）
-#[no_mangle]
-pub extern "C" fn hooked_ioctl(_fd: c_int, _request: u32, _arg: *mut c_void) -> c_int {
-    // TODO: 完整实现 binder 事务拦截
-    // 参考 hook.rs 中的设计
+#[cfg(not(target_os = "android"))]
+unsafe extern "C" fn __android_log_print(
+    _prio: c_int,
+    _tag: *const std::os::raw::c_char,
+    _msg: *const std::os::raw::c_char,
+) -> c_int {
     0
 }
 

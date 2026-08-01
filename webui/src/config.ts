@@ -1,12 +1,16 @@
-// 配置读写：injector.toml / config.toml
+// 配置读写：injector.toml / config.toml / deny.list / props.conf / usb.conf
 //
-// **全局 hook 模型**：injector.toml 只有一个 [hook].enabled 全局开关，
-// 不再有 scoop 白名单 / 每应用模式。所有走 keystore2 的应用都受影响。
+// **全局 hook + 黑名单模型**：injector.toml 只有 [hook].enabled 全局开关，
+// 黑名单放在独立的 deny.list（每行一个包名）。所有走 keystore2 的应用都受影响，
+// 黑名单里的包名豁免。props.conf / usb.conf 由 service.sh 应用。
 import { readFile, writeFile } from './cli';
 
 export const INJECTOR_PATH = '/data/adb/fktee/injector.toml';
 export const CONFIG_PATH = '/data/adb/fktee/config.toml';
 export const KEYBOX_PATH = '/data/adb/fktee/keybox.xml';
+export const DENY_LIST_PATH = '/data/adb/fktee/deny.list';
+export const PROPS_CONF_PATH = '/data/adb/fktee/props.conf';
+export const USB_CONF_PATH = '/data/adb/fktee/usb.conf';
 
 export interface InjectorConfig {
   enabled: boolean; // 全局总开关
@@ -104,5 +108,80 @@ export async function readConfigToml(): Promise<DaemonConfig> {
     logLevel: String(d.log_level || 'info'),
     autoStart: d.auto_start === true,
   };
+}
+
+// ===================== 黑名单 deny.list =====================
+// 每行一个包名，跳过空行与 # 注释。
+export async function readDenyList(): Promise<string[]> {
+  const text = await readFile(DENY_LIST_PATH);
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'));
+}
+
+export async function writeDenyList(packages: string[]): Promise<void> {
+  const header =
+    '# FKTee-rs 黑名单（deny.list）— 由 WebUI 维护\n' +
+    '# 列出的包名豁免伪造，保留真实 attestation。每行一个包名。\n';
+  const body = packages.filter((p) => p && !p.startsWith('#')).join('\n');
+  await writeFile(DENY_LIST_PATH, header + (body ? body + '\n' : ''));
+}
+
+// ===================== prop 属性隐藏 props.conf =====================
+// 每行 key=value，# 与空行忽略；特殊键 enabled=1/0 控制总开关。
+export interface PropsConfig {
+  enabled: boolean;
+  entries: { key: string; value: string }[];
+}
+
+export async function readPropsConf(): Promise<PropsConfig> {
+  const text = await readFile(PROPS_CONF_PATH);
+  const cfg: PropsConfig = { enabled: true, entries: [] };
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf('=');
+    if (idx < 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (key === 'enabled') {
+      cfg.enabled = value !== '0';
+    } else {
+      cfg.entries.push({ key, value });
+    }
+  }
+  return cfg;
+}
+
+export async function writePropsConf(cfg: PropsConfig): Promise<void> {
+  let out = '# FKTee-rs prop 属性隐藏配置 — 由 WebUI 维护\n';
+  out += `enabled=${cfg.enabled ? '1' : '0'}\n`;
+  for (const e of cfg.entries) {
+    out += `${e.key}=${e.value}\n`;
+  }
+  await writeFile(PROPS_CONF_PATH, out);
+}
+
+// ===================== USB 调试开关 usb.conf =====================
+export async function readUsbConf(): Promise<boolean> {
+  const text = await readFile(USB_CONF_PATH);
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf('=');
+    if (idx < 0) continue;
+    if (line.slice(0, idx).trim() === 'adb_enabled') {
+      return line.slice(idx + 1).trim() !== '0';
+    }
+  }
+  return true; // 缺省开启
+}
+
+export async function writeUsbConf(adbEnabled: boolean): Promise<void> {
+  const out =
+    '# FKTee-rs USB 调试开关配置 — 由 WebUI 维护\n' +
+    `adb_enabled=${adbEnabled ? '1' : '0'}\n`;
+  await writeFile(USB_CONF_PATH, out);
 }
 

@@ -75,7 +75,11 @@ pub fn find_process_by_name(name: &str) -> Option<i32> {
     for entry in entries.flatten() {
         let pid_str = entry.file_name();
         let pid_str = pid_str.to_string_lossy();
-        let pid: i32 = pid_str.parse().ok()?;
+        // /proc 下存在大量非数字条目（self、cpuinfo、fs、net …），遇到时跳过当前条目，
+        // 不要用 `?` 传播 None——那会提前终止整个扫描，导致 keystore2 几乎永远找不到。
+        let Ok(pid) = pid_str.parse::<i32>() else {
+            continue;
+        };
         if pid <= 0 {
             continue;
         }

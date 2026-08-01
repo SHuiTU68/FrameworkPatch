@@ -6,8 +6,9 @@ MODDIR=${0%/*}
 FKTEE_DIR=/data/adb/fktee
 
 # ---------- Ensure directory structure ----------
-mkdir -p "$FKTEE_DIR/config" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
-chmod 0700 "$FKTEE_DIR" "$FKTEE_DIR/config" "$FKTEE_DIR/data" "$FKTEE_DIR/logs" 2>/dev/null
+# 配置放在 $FKTEE_DIR 根目录（与 daemon/injector 硬编码路径一致）。
+mkdir -p "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
+chmod 0700 "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs" 2>/dev/null
 
 # ---------- Copy default configs (never overwrite existing) ----------
 # copy_default <module_src> <fktee_dst>
@@ -22,9 +23,12 @@ copy_default() {
     return 0
 }
 
-copy_default config.toml    config/config.toml
-copy_default injector.toml  config/injector.toml
-copy_default keybox.xml     config/keybox.xml
+copy_default config.toml    config.toml
+copy_default injector.toml  injector.toml
+copy_default keybox.xml     keybox.xml
+copy_default deny.list      deny.list
+copy_default props.conf     props.conf
+copy_default usb.conf       usb.conf
 
 # ---------- Clean stale runtime artifacts ----------
 # Old pid files from previous boot (process gone after reboot)

@@ -20,7 +20,9 @@ impl KeyboxManager {
     /// 从 `keybox.xml` 加载。
     ///
     /// - 文件不存在：返回 `None`（调用方走 fallback 模式）。
-    /// - 文件存在：解析后按算法分离 EC / RSA。
+    /// - 文件存在但解析失败：同样返回 `None` 走 fallback，**不向上抛错**——
+    ///   否则 daemon watchdog 会无限重启（崩溃循环）。与 `DaemonConfig::load` 的
+    ///   “备份+回退默认”策略保持一致。
     pub fn load(path: &Path) -> Result<Option<Self>> {
         if !path.exists() {
             log::warn!("keybox 文件不存在: {}", path.display());
@@ -29,16 +31,27 @@ impl KeyboxManager {
 
         let xml = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("读取 keybox 失败 ({}): {e}", path.display()))?;
-        let keybox = Keybox::from_xml(&xml)?;
-        let ec = keybox.select(KeyAlgorithm::Ecdsa).cloned();
-        let rsa = keybox.select(KeyAlgorithm::Rsa).cloned();
-
-        log::info!(
-            "keybox 加载完成: EC={}, RSA={}",
-            ec.is_some(),
-            rsa.is_some()
-        );
-        Ok(Some(Self { ec, rsa }))
+        match Keybox::from_xml(&xml) {
+            Ok(keybox) => {
+                let ec = keybox.select(KeyAlgorithm::Ecdsa).cloned();
+                let rsa = keybox.select(KeyAlgorithm::Rsa).cloned();
+                log::info!(
+                    "keybox 加载完成: EC={}, RSA={}",
+                    ec.is_some(),
+                    rsa.is_some()
+                );
+                Ok(Some(Self { ec, rsa }))
+            }
+            Err(e) => {
+                // 解析失败：备份原文件后走 fallback，避免 daemon 崩溃循环
+                log::error!("keybox 解析失败，走 fallback 模式: {e}");
+                let mut backup = path.as_os_str().to_owned();
+                backup.push(".bad");
+                let _ = std::fs::write(&backup, &xml);
+                log::warn!("已把损坏的 keybox 备份到 {}.bad", path.display());
+                Ok(None)
+            }
+        }
     }
 
     pub fn has_ec(&self) -> bool {
@@ -59,7 +72,7 @@ impl KeyboxManager {
 
     /// 热重载：重新读取 `keybox.xml` 并替换内部 EC / RSA。
     ///
-    /// 文件不存在时清空已有 keybox。
+    /// 文件不存在或解析失败时清空已有 keybox（走 fallback），不向上抛错。
     pub fn reload(&mut self, path: &Path) -> Result<()> {
         if !path.exists() {
             log::warn!("热重载时 keybox 文件不存在，清空: {}", path.display());
@@ -69,14 +82,23 @@ impl KeyboxManager {
         }
 
         let xml = std::fs::read_to_string(path)?;
-        let keybox = Keybox::from_xml(&xml)?;
-        self.ec = keybox.select(KeyAlgorithm::Ecdsa).cloned();
-        self.rsa = keybox.select(KeyAlgorithm::Rsa).cloned();
-        log::info!(
-            "keybox 热重载完成: EC={}, RSA={}",
-            self.has_ec(),
-            self.has_rsa()
-        );
-        Ok(())
+        match Keybox::from_xml(&xml) {
+            Ok(keybox) => {
+                self.ec = keybox.select(KeyAlgorithm::Ecdsa).cloned();
+                self.rsa = keybox.select(KeyAlgorithm::Rsa).cloned();
+                log::info!(
+                    "keybox 热重载完成: EC={}, RSA={}",
+                    self.has_ec(),
+                    self.has_rsa()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("keybox 热重载解析失败，清空走 fallback: {e}");
+                self.ec = None;
+                self.rsa = None;
+                Ok(())
+            }
+        }
     }
 }

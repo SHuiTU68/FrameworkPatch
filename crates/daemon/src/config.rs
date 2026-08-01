@@ -176,7 +176,7 @@ impl DaemonConfig {
 
 // ===================== 注入器配置（镜像 injector crate） =====================
 
-/// injector 配置（全局 hook 模型）。
+/// injector 配置（全局 hook + 黑名单模型）。
 ///
 /// 与 `crates/injector/src/config.rs` 等价。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,15 +187,23 @@ pub struct InjectorConfig {
     pub intercept: InterceptConfig,
 }
 
-/// 全局 hook 开关。
+/// 全局 hook 开关 + 黑名单。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
     /// 全局总开关：`true` = 所有应用走 keystore2 的 attestation 都用 keybox 伪造。
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// 黑名单：列出的包名不会被伪造（透传原始 attestation）。
+    /// 可在 toml 声明，运行时也会被 `deny.list` 文件覆盖。
+    #[serde(default)]
+    pub deny_packages: Vec<String>,
 }
 
 fn default_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -203,18 +211,26 @@ impl Default for HookConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
+            deny_packages: Vec::new(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptConfig {
+    #[serde(default = "default_true")]
     pub get_key_entry: bool,
+    #[serde(default = "default_true")]
     pub generate_key: bool,
+    #[serde(default = "default_true")]
     pub import_key: bool,
+    #[serde(default = "default_true")]
     pub create_operation: bool,
+    #[serde(default = "default_true")]
     pub delete_key: bool,
+    #[serde(default = "default_true")]
     pub list_entries: bool,
+    #[serde(default = "default_true")]
     pub grant: bool,
 }
 
@@ -249,17 +265,38 @@ impl InjectorConfig {
         }
 
         let content = std::fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&content)?;
+        let mut config: Self = toml::from_str(&content)?;
         log::info!(
-            "配置加载完成: hook.enabled={} (全局模式，所有应用生效)",
-            config.hook.enabled
+            "配置加载完成: hook.enabled={} deny={} (全局模式，所有应用生效)",
+            config.hook.enabled,
+            config.hook.deny_packages.len()
         );
         Ok(config)
     }
 
-    /// hook 是否生效。
-    ///
-    /// 全局模型下没有“目标应用”概念——要么对所有应用生效，要么完全不拦截。
+    /// 从 `deny.list` 文件覆盖加载黑名单（每行一个包名，跳过空行与 `#` 注释）。
+    pub fn load_deny_list(&mut self, path: &Path) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let pkgs: Vec<String> = content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(str::to_string)
+            .collect();
+        if !pkgs.is_empty() {
+            self.hook.deny_packages = pkgs;
+        }
+        log::info!("黑名单加载: {} 个包", self.hook.deny_packages.len());
+    }
+
+    /// hook 是否对指定包名生效（全局开关开 + 包名不在黑名单）。
+    pub fn should_forge(&self, package: &str) -> bool {
+        self.hook.enabled && !self.hook.deny_packages.iter().any(|p| p == package)
+    }
+
+    /// hook 是否生效（不考虑黑名单）。
     pub fn is_active(&self) -> bool {
         self.hook.enabled
     }

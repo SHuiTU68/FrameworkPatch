@@ -24,11 +24,21 @@ use anyhow::Result;
 const BACKDOOR_CODE: u32 = 0xfeedface;
 
 /// binder ioctl 命令
-const BINDER_WRITE_READ: u32 = _iowr(b'b', 1, ());
+///
+/// `BINDER_WRITE_READ = _IOWR('b', 1, struct binder_write_read)`
+/// `_IOWR = _IOC_READ|_IOC_WRITE = (2|1)<<30 = 3<<30`（Linux asm-generic/ioctl.h:
+/// `_IOC_READ=2`, `_IOC_WRITE=1`）。
+const BINDER_WRITE_READ: u32 = _iowr(b'b', 1, std::mem::size_of::<BinderWriteRead>() as u32);
 
 /// binder 返回命令
-const BR_TRANSACTION: u32 = _ior_br(b'r', 12, ());
-const BR_TRANSACTION_SEC_CTX: u32 = _ior_br(b'r', 15, ());
+///
+/// `BR_TRANSACTION        = _IOR('r', 2,  struct binder_transaction_data)`
+/// `BR_TRANSACTION_SEC_CTX = _IOR('r', 42, struct binder_transaction_data_secctx)`
+/// （见内核 `include/uapi/linux/android/binder.h`；不同内核版本 nr 偶有差异，
+///  启用真实 hook 前请对照目标内核 binder.h 校验。）
+const BR_TRANSACTION: u32 = _ior(b'r', 2, std::mem::size_of::<BinderTransactionData>() as u32);
+const BR_TRANSACTION_SEC_CTX: u32 =
+    _ior(b'r', 42, std::mem::size_of::<BinderTransactionDataSecCtx>() as u32);
 
 // ============================================================================
 // LSPlt FFI 声明
@@ -207,19 +217,23 @@ struct BinderTransactionDataSecCtx {
 }
 
 // ============================================================================
-// ioctl 宏（与内核 _IOW/_IOR 一致）
+// ioctl 宏（与内核 _IOW/_IOR/_IOWR 一致；Linux asm-generic/ioctl.h）
+//
+// _IOC_NRBITS=8, _IOC_TYPEBITS=8, _IOC_SIZEBITS=14, _IOC_DIRBITS=2
+// _IOC(dir, type, nr, size) = (dir<<30) | (size<<16) | (type<<8) | nr
+// _IOC_NONE=0, _IOC_WRITE=1, _IOC_READ=2
+//   _IOR  = _IOC_READ       = 2<<30
+//   _IOW  = _IOC_WRITE      = 1<<30
+//   _IOWR = _IOC_READ|WRITE = 3<<30
 // ============================================================================
 
-/// _IOWR(type, nr, size) = 2 << 30 | size << 16 | type << 8 | nr
-const fn _iowr(typ: u8, nr: u32, _size_marker: ()) -> u32 {
-    let size = std::mem::size_of::<BinderWriteRead>() as u32;
-    (2 << 30) | ((size & 0x3fff) << 16) | ((typ as u32) << 8) | nr
+/// `_IOWR(type, nr, size)`：dir = READ|WRITE = 3。
+const fn _iowr(typ: u8, nr: u32, size: u32) -> u32 {
+    (3 << 30) | ((size & 0x3fff) << 16) | ((typ as u32) << 8) | nr
 }
 
-/// _IOR(type, nr, size) = 2 << 30 | size << 16 | type << 8 | nr
-/// 注意：binder 返回命令使用不同的编码方式
-const fn _ior_br(typ: u8, nr: u32, _size_marker: ()) -> u32 {
-    let size = std::mem::size_of::<BinderTransactionData>() as u32;
+/// `_IOR(type, nr, size)`：dir = READ = 2。binder 返回命令（BR_*）用此编码。
+const fn _ior(typ: u8, nr: u32, size: u32) -> u32 {
     (2 << 30) | ((size & 0x3fff) << 16) | ((typ as u32) << 8) | nr
 }
 
@@ -229,9 +243,17 @@ mod tests {
 
     #[test]
     fn test_ioctl_consts() {
-        // 确保常量在编译期正确计算
+        // 确保常量在编译期正确计算且非零
         assert_ne!(BINDER_WRITE_READ, 0);
         assert_ne!(BR_TRANSACTION, 0);
         assert_ne!(BR_TRANSACTION_SEC_CTX, 0);
+        // 方向位校验：BINDER_WRITE_READ 必须是 _IOWR（dir=3）
+        assert_eq!(BINDER_WRITE_READ >> 30, 3);
+        // BR_* 必须是 _IOR（dir=2）
+        assert_eq!(BR_TRANSACTION >> 30, 2);
+        assert_eq!(BR_TRANSACTION_SEC_CTX >> 30, 2);
+        // nr 校验
+        assert_eq!((BR_TRANSACTION >> 0) & 0xff, 2);
+        assert_eq!((BR_TRANSACTION_SEC_CTX >> 0) & 0xff, 42);
     }
 }

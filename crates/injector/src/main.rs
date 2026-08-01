@@ -58,9 +58,19 @@ fn main() -> Result<()> {
     }
 
     // 加载配置
-    let cfg = config::InjectorConfig::load(&config_path)?;
+    let mut cfg = config::InjectorConfig::load(&config_path)?;
+    // 覆盖加载黑名单（deny.list，与 config_path 同目录）
+    let deny_path = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("/data/adb/fktee"))
+        .join("deny.list");
+    cfg.load_deny_list(&deny_path);
+
     if cfg.is_active() {
-        log::info!("全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox");
+        log::info!(
+            "全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox（黑名单 {} 个包豁免）",
+            cfg.hook.deny_packages.len()
+        );
     } else {
         log::warn!("全局 hook 已禁用：注入仅完成 hook 安装，但不会伪造任何事务");
     }

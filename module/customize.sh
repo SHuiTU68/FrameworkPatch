@@ -47,9 +47,10 @@ fi
 # ---------- Create config directory ----------
 FKTEE_DIR=/data/adb/fktee
 ui_print "- Creating config directory: $FKTEE_DIR"
-mkdir -p "$FKTEE_DIR/config" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
-chmod 0700 "$FKTEE_DIR"
-chmod 0700 "$FKTEE_DIR/config" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
+# 配置直接放在 $FKTEE_DIR 根目录（与 daemon/injector 读取的硬编码路径一致），
+# data/ 与 logs/ 仍为子目录。避免 config/ 子目录导致的路径不一致。
+mkdir -p "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
+chmod 0700 "$FKTEE_DIR" "$FKTEE_DIR/data" "$FKTEE_DIR/logs"
 
 # ---------- Copy default configs on first install ----------
 # copy_default <module_src> <fktee_dst>
@@ -70,9 +71,12 @@ copy_default() {
     return 0
 }
 
-copy_default config.toml    config/config.toml
-copy_default injector.toml  config/injector.toml
-copy_default keybox.xml     config/keybox.xml
+copy_default config.toml    config.toml
+copy_default injector.toml  injector.toml
+copy_default keybox.xml     keybox.xml
+copy_default deny.list      deny.list
+copy_default props.conf     props.conf
+copy_default usb.conf       usb.conf
 
 # ---------- Set permissions ----------
 ui_print "- Setting permissions..."

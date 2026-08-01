@@ -1,0 +1,10 @@
+# FKTee-rs 黑名单（deny list）
+#
+# 全局 hook 模型下，所有走 keystore2 的应用 attestation 都会被伪造。
+# 列在此文件中的包名会被豁免——保留其真实硬件证书（透传原始 attestation）。
+#
+# 用途：个别敏感应用（如某些银行/支付 App）开启伪造后可能异常，
+# 把它们加到这里即可让它们走回真实证书，其余应用继续伪造。
+#
+# 每行一个包名，# 开头的行与空行忽略。WebUI「黑名单」标签会直接编辑此文件。
+# 此文件优先级高于 injector.toml 里的 [hook].deny_packages。

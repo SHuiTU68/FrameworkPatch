@@ -10,11 +10,15 @@ FKTEE_DIR=/data/adb/fktee
 PIDFILE="$FKTEE_DIR/data/injector.pid"
 ARCH=$(getprop ro.product.cpu.abi)
 BIN="$MODDIR/libs/$ARCH/inject"
+# payload 与配置的绝对路径——显式传给 inject，避免 injector 自动模式读取
+# 不存在的 /data/adb/fktee/injector.payload（payload 实际在 $MODPATH/libs/$ARCH/）。
+PAYLOAD="$MODDIR/libs/$ARCH/injector.payload"
+CONFIG="$FKTEE_DIR/injector.toml"
 
 COOLDOWN=15        # seconds: wait after an inject attempt before retrying
 CHECK_INTERVAL=5   # seconds: how often to verify injection state
-# Marker name this injector leaves in keystore2 maps (adjust to real lib name)
-INJECT_MARKER="fktee"
+# Marker name this injector leaves in keystore2 maps（payload 文件名片段）
+INJECT_MARKER="injector.payload"
 
 # ---------- Helpers ----------
 # Locate the keystore2 process id
@@ -50,8 +54,12 @@ is_injector_running() {
 
 start_inject() {
     [ -x "$BIN" ] || return 1
+    [ -f "$PAYLOAD" ] || return 1
+    # 显式传 <pid> <payload> <config>，不依赖 injector 自动模式的硬编码路径
+    ks=$(get_keystore_pid)
+    [ -n "$ks" ] || return 1
     rm -f "$PIDFILE"
-    "$BIN" &
+    "$BIN" "$ks" "$PAYLOAD" "$CONFIG" &
     echo $! > "$PIDFILE"
 }
 

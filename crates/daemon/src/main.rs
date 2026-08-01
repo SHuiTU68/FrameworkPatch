@@ -24,12 +24,17 @@ fn main() -> Result<()> {
     let config_dir = PathBuf::from("/data/adb/fktee");
 
     // 加载配置
-    let cfg = config::DaemonConfig::load(&config_dir.join("config.toml"))?;
-    let injector_cfg = config::InjectorConfig::load(&config_dir.join("injector.toml"))?;
+    let mut cfg = config::DaemonConfig::load(&config_dir.join("config.toml"))?;
+    let mut injector_cfg = config::InjectorConfig::load(&config_dir.join("injector.toml"))?;
+    // 覆盖加载黑名单（deny.list）
+    injector_cfg.load_deny_list(&config_dir.join("deny.list"));
 
     log::info!("后端模式: {:?}", cfg.backend.mode);
     if injector_cfg.is_active() {
-        log::info!("全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox");
+        log::info!(
+            "全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox（黑名单 {} 个包豁免）",
+            injector_cfg.hook.deny_packages.len()
+        );
     } else {
         log::warn!("全局 hook 已禁用：所有事务透传，不伪造任何证书");
     }

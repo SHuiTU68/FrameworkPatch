@@ -18,22 +18,46 @@ done
 # Give keystore2 a moment to settle
 sleep 3
 
-# ---------- Prop hiding (resetprop) ----------
-hide_props() {
+# ---------- Prop hiding (resetprop, config-driven) ----------
+# 读取 /data/adb/fktee/props.conf（每行 key=value，# 与空行忽略）。
+# 特殊键 enabled=1 开启；其余行先 resetprop --delete 再 resetprop set，
+# 保证读取者看不到原始值。无 resetprop 或无配置文件则跳过。
+apply_props() {
+    local conf="$FKTEE_DIR/props.conf"
+    [ -f "$conf" ] || return 0
     command -v resetprop >/dev/null 2>&1 || return 0
-    # Delete first so reads don't see the original value
-    resetprop --delete ro.boot.verifiedbootstate 2>/dev/null
-    resetprop --delete ro.boot.flash.locked 2>/dev/null
-    resetprop --delete ro.boot.vbmeta.device_state 2>/dev/null
-    resetprop --delete ro.boot.veritymode 2>/dev/null
-    # Inject "green/locked" state
-    resetprop ro.boot.verifiedbootstate green 2>/dev/null
-    resetprop ro.boot.flash.locked 1 2>/dev/null
-    resetprop ro.boot.vbmeta.device_state locked 2>/dev/null
-    resetprop ro.boot.veritymode enforcing 2>/dev/null
+
+    local enabled=1
+    while IFS= read -r line; do
+        case "$line" in ''|\#*) continue;; esac
+        [ "${line%%=*}" = "enabled" ] && { enabled=${line#*=}; break; }
+    done < "$conf"
+    [ "$enabled" = "1" ] || return 0
+
+    while IFS= read -r line; do
+        case "$line" in ''|\#*|enabled=*) continue;; esac
+        key=${line%%=*}; val=${line#*=}
+        resetprop --delete "$key" 2>/dev/null
+        resetprop "$key" "$val" 2>/dev/null
+    done < "$conf"
 }
 
-hide_props
+# ---------- USB 调试开关 (config-driven) ----------
+# 读取 /data/adb/fktee/usb.conf 的 adb_enabled=1/0，通过 settings 持久化。
+apply_usb() {
+    local conf="$FKTEE_DIR/usb.conf"
+    [ -f "$conf" ] || return 0
+    local adb=1
+    while IFS= read -r line; do
+        case "$line" in ''|\#*) continue;; esac
+        [ "${line%%=*}" = "adb_enabled" ] && { adb=${line#*=}; break; }
+    done < "$conf"
+    # settings 在 late_start 阶段已可用
+    command -v settings >/dev/null 2>&1 && settings put global adb_enabled "$adb" 2>/dev/null
+}
+
+apply_props
+apply_usb
 
 # ---------- Helpers ----------
 is_pid_alive() {
@@ -83,8 +107,9 @@ while true; do
         kill_pidfile "$PID_INJECTOR"
     fi
 
-    # Re-apply prop hiding periodically (some processes reset props)
-    hide_props
+    # Re-apply prop hiding & USB state periodically (some processes reset props)
+    apply_props
+    apply_usb
 
     sleep 5
 done

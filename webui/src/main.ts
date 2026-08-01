@@ -4,8 +4,11 @@ import { fullScreen, toast } from 'kernelsu-alt';
 import { renderGlobal } from './global';
 import { renderKeybox } from './keybox';
 import { renderStatus } from './status';
+import { renderDeny } from './deny';
+import { renderUsb } from './usb';
+import { renderProps } from './props';
 
-type Tab = 'global' | 'keybox' | 'status';
+type Tab = 'global' | 'keybox' | 'deny' | 'props' | 'usb' | 'status';
 
 const app = document.getElementById('app')!;
 let currentTab: Tab = 'global';
@@ -112,6 +115,10 @@ body {
 .mode-pkg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px; }
 code { background: var(--md-sys-color-surface-variant); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 md-checkbox { flex: none; }
+.prop-card { padding: 8px 10px; }
+.prop-card .prop-body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.prop-card md-outlined-text-field { width: 100%; }
+.prop-card .prop-del { flex: none; }
 </style>
 `;
 
@@ -131,6 +138,9 @@ function shell(): string {
     <div class="tabs">
       ${tabBtn('global', '全局')}
       ${tabBtn('keybox', 'Keybox')}
+      ${tabBtn('deny', '黑名单')}
+      ${tabBtn('props', '属性')}
+      ${tabBtn('usb', 'USB')}
       ${tabBtn('status', '状态')}
     </div>
     <div id="content"></div>
@@ -149,6 +159,9 @@ function renderContent(): void {
   const content = document.getElementById('content')!;
   if (currentTab === 'global') renderGlobal(content);
   else if (currentTab === 'keybox') renderKeybox(content);
+  else if (currentTab === 'deny') renderDeny(content);
+  else if (currentTab === 'props') renderProps(content);
+  else if (currentTab === 'usb') renderUsb(content);
   else renderStatus(content);
 }
 
