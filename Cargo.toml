@@ -30,7 +30,7 @@ pkcs8 = { version = "0.10", features = ["pem"] }
 x509-cert = { version = "0.2", features = ["builder"] }
 der = "0.7"
 # 系统调用（ptrace 注入）
-nix = { version = "0.29", features = ["ptrace", "signal", "process", "fs", "user"] }
+nix = { version = "0.29", features = ["ptrace", "signal", "process", "fs", "user", "aio"] }
 # PLT hook（binder ioctl）— LSPlt 是 C++ 库，通过 FFI 调用
 # lsplt-rs 不在 crates.io，injector 中通过 extern "C" 直接链接 vendored LSPlt
 # 参考 OhMyKeymint 的做法：vendor LSPlt 源码 + Rust FFI wrapper

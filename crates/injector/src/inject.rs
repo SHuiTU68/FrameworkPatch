@@ -11,13 +11,63 @@
 //! 7. 远程 dlsym 找到 entry 符号并调用
 //! 8. 恢复原始寄存器，PTRACE_DETACH
 
-use anyhow::{bail, Context, Result};
-use nix::sys::ptrace;
+use anyhow::{Context, Result};
+#[cfg(target_arch = "aarch64")]
+use anyhow::bail;
+#[cfg(target_arch = "aarch64")]
 use nix::sys::wait::waitpid;
+#[cfg(target_arch = "aarch64")]
 use nix::unistd::Pid;
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
+
+/// NT_PRSTATUS 常量（用于 PTRACE_GETREGSET/SETREGSET）
+#[cfg(target_arch = "aarch64")]
+const NT_PRSTATUS: libc::c_long = 1;
+
+/// 读取目标进程寄存器（aarch64 使用 PTRACE_GETREGSET + NT_PRSTATUS）
+#[cfg(target_arch = "aarch64")]
+fn ptrace_getregs(pid: i32) -> Result<libc::user_regs_struct> {
+    let mut regs: libc::user_regs_struct = unsafe { std::mem::zeroed() };
+    let mut iov = libc::iovec {
+        iov_base: &mut regs as *mut _ as *mut libc::c_void,
+        iov_len: std::mem::size_of::<libc::user_regs_struct>(),
+    };
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_GETREGSET,
+            pid,
+            NT_PRSTATUS as *mut libc::c_void,
+            &mut iov as *mut _ as *mut libc::c_void,
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_GETREGSET 失败: {}", std::io::Error::last_os_error());
+    }
+    Ok(regs)
+}
+
+/// 设置目标进程寄存器（aarch64 使用 PTRACE_SETREGSET + NT_PRSTATUS）
+#[cfg(target_arch = "aarch64")]
+fn ptrace_setregs(pid: i32, regs: &libc::user_regs_struct) -> Result<()> {
+    let mut iov = libc::iovec {
+        iov_base: regs as *const _ as *mut libc::c_void,
+        iov_len: std::mem::size_of::<libc::user_regs_struct>(),
+    };
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_SETREGSET,
+            pid,
+            NT_PRSTATUS as *mut libc::c_void,
+            &mut iov as *mut _ as *mut libc::c_void,
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_SETREGSET 失败: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
 
 /// 通过进程名查找 PID
 pub fn find_process_by_name(name: &str) -> Option<i32> {
@@ -65,7 +115,17 @@ pub fn inject_library(pid: i32, payload_path: &Path) -> Result<()> {
     let target_pid = Pid::from_raw(pid);
 
     log::debug!("PTRACE_ATTACH pid={pid}");
-    ptrace::attach(target_pid).context("PTRACE_ATTACH 失败")?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_ATTACH,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_ATTACH 失败: {}", std::io::Error::last_os_error());
+    }
     waitpid(target_pid, None).context("等待 attach 完成失败")?;
 
     let result = do_inject(pid, payload_path);
@@ -87,7 +147,7 @@ pub fn inject_library(_pid: i32, _payload_path: &Path) -> Result<()> {
 #[cfg(target_arch = "aarch64")]
 fn do_inject(pid: i32, payload_path: &Path) -> Result<()> {
     // 1. 保存原始寄存器
-    let original_regs = ptrace::getregs(Pid::from_raw(pid))
+    let original_regs = ptrace_getregs(pid)
         .context("读取寄存器失败")?;
     log::debug!("原始 PC=0x{:x}", original_regs.pc);
 
@@ -152,7 +212,7 @@ fn do_inject(pid: i32, payload_path: &Path) -> Result<()> {
     log::info!("entry 符号地址=0x{:x}", entry_addr as usize);
 
     // 8. 远程调用 entry(handle) 完成 hook 安装
-    remote_call_void(pid, entry_addr, handle as u64, libc_base)
+    remote_call_void(pid, entry_addr as u64, handle as u64, libc_base)
         .context("远程调用 entry() 失败")?;
 
     log::info!("entry() 调用完成");
@@ -304,7 +364,7 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, libc_base: 
     let libc_entry = maps.iter().find(|m| m.pathname.contains("libc.so")).cloned();
 
     // 在远程栈上写入路径
-    let regs = ptrace::getregs(target_pid)?;
+    let regs = ptrace_getregs(pid)?;
     let sp = regs.sp;
 
     // 写入路径到栈上（向下生长，留对齐空间）
@@ -317,30 +377,40 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, libc_base: 
     // x1 = flags (RTLD_NOW = 2)
     // x2 = extinfo 指针 (NULL for now, 简化实现)
     let mut call_regs = regs;
-    call_regs.x[0] = write_addr;
-    call_regs.x[1] = 2; // RTLD_NOW
-    call_regs.x[2] = 0; // extinfo = NULL
+    call_regs.regs[0] = write_addr;
+    call_regs.regs[1] = 2; // RTLD_NOW
+    call_regs.regs[2] = 0; // extinfo = NULL
     call_regs.pc = dlopen_ext_addr;
     // LR (x30) 设为一个安全返回地址（找一段非可执行的区域）
-    call_regs.x[30] = find_safe_return_addr(&maps);
+    call_regs.regs[30] = find_safe_return_addr(&maps);
 
     // 设置 SP
     call_regs.sp = write_addr & !0xF;
 
-    ptrace::setregs(target_pid, call_regs)?;
-    ptrace::cont(target_pid, None)?;
+    ptrace_setregs(pid, &call_regs)?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
+    }
 
     // 等待远程调用完成
     waitpid(target_pid, None)?;
 
     // 读取返回值
-    let result_regs = ptrace::getregs(target_pid)?;
-    let handle = result_regs.x[0] as *mut std::ffi::c_void;
+    let result_regs = ptrace_getregs(pid)?;
+    let handle = result_regs.regs[0] as *mut std::ffi::c_void;
 
     // 恢复原始 SP（恢复内存）
     let mut restore_regs = call_regs;
     restore_regs.sp = sp;
-    let _ = ptrace::setregs(target_pid, restore_regs);
+    let _ = ptrace_setregs(pid, &restore_regs);
 
     Ok(handle)
 }
@@ -351,7 +421,7 @@ fn remote_dlsym(pid: i32, dlsym_addr: u64, handle: *mut std::ffi::c_void, name: 
     let target_pid = Pid::from_raw(pid);
     let maps = parse_proc_maps(pid)?;
 
-    let regs = ptrace::getregs(target_pid)?;
+    let regs = ptrace_getregs(pid)?;
     let sp = regs.sp;
 
     // 在栈上写入符号名
@@ -362,23 +432,33 @@ fn remote_dlsym(pid: i32, dlsym_addr: u64, handle: *mut std::ffi::c_void, name: 
     write_memory(pid, name_addr, name_bytes)?;
 
     let mut call_regs = regs;
-    call_regs.x[0] = handle as u64;
-    call_regs.x[1] = name_addr;
+    call_regs.regs[0] = handle as u64;
+    call_regs.regs[1] = name_addr;
     call_regs.pc = dlsym_addr;
-    call_regs.x[30] = find_safe_return_addr(&maps);
+    call_regs.regs[30] = find_safe_return_addr(&maps);
     call_regs.sp = name_addr & !0xF;
 
-    ptrace::setregs(target_pid, call_regs)?;
-    ptrace::cont(target_pid, None)?;
+    ptrace_setregs(pid, &call_regs)?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
+    }
     waitpid(target_pid, None)?;
 
-    let result_regs = ptrace::getregs(target_pid)?;
-    let sym_addr = result_regs.x[0] as *mut std::ffi::c_void;
+    let result_regs = ptrace_getregs(pid)?;
+    let sym_addr = result_regs.regs[0] as *mut std::ffi::c_void;
 
     // 恢复 SP
     let mut restore_regs = call_regs;
     restore_regs.sp = sp;
-    let _ = ptrace::setregs(target_pid, restore_regs);
+    let _ = ptrace_setregs(pid, &restore_regs);
 
     Ok(sym_addr)
 }
@@ -389,15 +469,25 @@ fn remote_call_void(pid: i32, func_addr: u64, arg0: u64, _libc_base: u64) -> Res
     let target_pid = Pid::from_raw(pid);
     let maps = parse_proc_maps(pid)?;
 
-    let regs = ptrace::getregs(target_pid)?;
+    let regs = ptrace_getregs(pid)?;
 
     let mut call_regs = regs;
-    call_regs.x[0] = arg0;
+    call_regs.regs[0] = arg0;
     call_regs.pc = func_addr;
-    call_regs.x[30] = find_safe_return_addr(&maps);
+    call_regs.regs[30] = find_safe_return_addr(&maps);
 
-    ptrace::setregs(target_pid, call_regs)?;
-    ptrace::cont(target_pid, None)?;
+    ptrace_setregs(pid, &call_regs)?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
+    }
     waitpid(target_pid, None)?;
 
     // 检查是否异常
@@ -410,8 +500,6 @@ fn remote_call_void(pid: i32, func_addr: u64, arg0: u64, _libc_base: u64) -> Res
 /// 写入内存到目标进程
 #[cfg(target_arch = "aarch64")]
 fn write_memory(pid: i32, addr: u64, data: &[u8]) -> Result<()> {
-    let target_pid = Pid::from_raw(pid);
-
     // 按 word 写入（8字节对齐）
     let mut aligned = data.to_vec();
     while aligned.len() % 8 != 0 {
@@ -420,7 +508,17 @@ fn write_memory(pid: i32, addr: u64, data: &[u8]) -> Result<()> {
 
     for (i, chunk) in aligned.chunks(8).enumerate() {
         let word = u64::from_le_bytes(chunk.try_into().unwrap());
-        ptrace::write(target_pid, addr as *mut u64, word as i64)?;
+        let ret = unsafe {
+            libc::ptrace(
+                libc::PTRACE_POKEDATA,
+                pid,
+                (addr + (i as u64 * 8)) as *mut libc::c_void,
+                word as *mut libc::c_void,
+            )
+        };
+        if ret == -1 {
+            bail!("PTRACE_POKEDATA 写入失败: {}", std::io::Error::last_os_error());
+        }
     }
 
     Ok(())
@@ -439,6 +537,16 @@ fn find_safe_return_addr(maps: &[MapEntry]) -> u64 {
 #[cfg(target_arch = "aarch64")]
 fn restore_and_detach(target_pid: Pid) -> Result<()> {
     // 恢复原始寄存器已在调用者中处理
-    ptrace::detach(target_pid, None)?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_DETACH,
+            target_pid.as_raw(),
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_DETACH 失败: {}", std::io::Error::last_os_error());
+    }
     Ok(())
 }
