@@ -14,7 +14,7 @@ webui/dist/
 # Build artifacts
 /output/
 /module/libs/
-/module/webroot/assets/
+/module/webroot/
 
 # Keybox（私钥，绝不提交）
 keybox.xml
