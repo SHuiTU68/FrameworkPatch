@@ -270,12 +270,26 @@ EOF
 # 把 patched framework.jar 放进模块（Magisk 会覆盖 /system/framework/framework.jar）
 cp -f "$PATCHED_OUT/framework.jar" "$MAGISK_OUT/system/framework/framework.jar"
 
-# post-fs-data.sh：打印提示（实际替换由 Magisk 的 system/ 覆盖机制完成）
+# 关键：隐藏 /system/framework/oat/ 目录。
+# framework.jar 被替换后，oat/ 里的预编译 boot image 仍是旧 dex 编译的，
+# 校验和不匹配 → ART 回退到解释器模式 → 全系统极慢 → 卡负一屏 → watchdog 重启。
+# .replace 文件让 Magisk 把整个 oat/ 目录替换为空，强制 ART 用新 framework.jar
+# 重新 dex2oat 编译（编译产物写入 /data/dalvik-cache/，不动 /system）。
+mkdir -p "$MAGISK_OUT/system/framework/oat"
+touch "$MAGISK_OUT/system/framework/oat/.replace"
+
+# post-fs-data.sh：清理 dalvik-cache 里的旧 boot image 编译产物。
+# oat/.replace 已隐藏 /system 侧的旧产物，这里清 /data 侧的缓存，
+# 确保首次重启时 ART 从新 framework.jar 全量 dex2oat 重新编译。
 cat > "$MAGISK_OUT/post-fs-data.sh" <<'EOF'
 #!/system/bin/sh
-# FrameworkPatch: framework.jar 已由 Magisk 模块 system/ 覆盖机制替换。
-# 此处无需额外操作。如开机 bootloop，在 recovery 删除本模块即可恢复。
-echo "[FrameworkPatch] system/framework/framework.jar replaced."
+# FrameworkPatch: framework.jar 由 Magisk system/ 覆盖机制替换。
+# 清理旧 boot image 编译缓存，强制 ART 用新 framework.jar 重新 dex2oat。
+# 不清理会导致 dex 校验和不匹配 → ART 回退解释器 → 卡死/watchdog 重启。
+echo "[FrameworkPatch] cleaning stale boot image cache..."
+rm -f /data/dalvik-cache/*/boot.* 2>/dev/null
+rm -f /data/dalvik-cache/*/system@framework@* 2>/dev/null
+echo "[FrameworkPatch] framework.jar replaced, ART will recompile on next boot (may take 2-5 min)."
 EOF
 chmod +x "$MAGISK_OUT/post-fs-data.sh"
 
