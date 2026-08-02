@@ -15,6 +15,8 @@ RESTART_ALL_FILE=$TEERS_DIR/restart.all
 ARCH=$(getprop ro.product.cpu.abi)
 
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/vendor/lib64/:/system/lib64/:/apex/com.android.runtime/lib64/bionic/"
+# env_logger 默认 WARN 级别，不设 RUST_LOG 则 info! 日志全部丢失，fktee.log 看起来是空的
+export RUST_LOG="${RUST_LOG:-info}"
 
 find_module_fktee() {
   if [ -f "$STATE_DIR/fktee" ]; then
