@@ -5,19 +5,19 @@
 //! 它负责：
 //! 1. 初始化日志
 //! 2. 读取 injector.toml 的 `[hook].enabled` 全局开关
-//! 3. 安装 binder ioctl hook（LSPlt）——**全局拦截**，所有走 keystore2 的
-//!    应用 attestation 请求都改写，不做应用白名单过滤
-//! 4. 与 daemon 建立 RPC 通信
-//!
-//! 注意：作为 cdylib，它通过 `#[path]` 内联 hook 模块的实现，
-//! 不能引用 bin crate 的模块。
+//! 3. 从 allow.list 加载白名单
+//! 4. 安装 binder ioctl PLT hook（自实现，不依赖 LSPlt）
+//! 5. 对每个 binder 事务检查调用方 UID 是否在白名单中：
+//!    - 在白名单中 → 对 attestation 事务进行伪造
+//!    - 不在白名单中 → 透传原始事务
 
-// 复用 hook.rs 的实现（统一一份 hook 代码，避免 bin/lib 各持一份占位 stub）。
+// 复用 hook.rs 的实现（统一一份 hook 代码）。
 #[path = "hook.rs"]
 mod hook;
 
 use std::ffi::c_void;
 use std::os::raw::c_int;
+use std::path::Path;
 use std::sync::atomic::AtomicPtr;
 
 /// 运行时缓存的 __android_log_print 函数指针
@@ -39,13 +39,31 @@ pub extern "C" fn entry(_handle: *mut c_void) {
 
     log_info("FKTee-rs payload 已加载到 keystore2 进程");
 
-    // 安装 binder ioctl hook（全局：所有应用 attestation 都改写）
-    if let Err(e) = hook::init_hook() {
-        log_error(&format!("hook 初始化失败: {e}"));
-        return;
+    // 设置 hook 日志函数（复用 payload 的 __android_log_print）
+    let log_fn = ANDROID_LOG_PRINT.load(std::sync::atomic::Ordering::Relaxed);
+    if !log_fn.is_null() {
+        hook::set_log_fn(log_fn);
     }
 
-    log_info("FKTee-rs 全局 hook 安装完成，开始拦截所有 keystore2 attestation 事务");
+    // 加载白名单
+    let allow_path = Path::new("/data/adb/Tee-rs/allow.list");
+    if allow_path.exists() {
+        hook::load_allow_list(allow_path);
+        log_info(&format!("白名单已加载: {:?}", allow_path));
+    } else {
+        log_info("allow.list 不存在，所有应用透传（无伪造）");
+        hook::load_allow_list(allow_path); // 会设置空白名单
+    }
+
+    // 安装 binder ioctl PLT hook（自实现，不依赖 LSPlt）
+    match hook::init_hook() {
+        Ok(()) => {
+            log_info("FKTee-rs PLT hook 安装成功，开始按白名单拦截 keystore2 事务");
+        }
+        Err(e) => {
+            log_error(&format!("PLT hook 安装失败: {e}"));
+        }
+    }
 }
 
 /// 初始化日志：通过运行时 dlsym 查找 __android_log_print

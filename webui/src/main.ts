@@ -26,7 +26,7 @@ const history = new History()
 const keybind = new Keybind()
 const updateManager = new UpdateManager(cli)
 
-// FKTee 单一配置：deny.list + config.toml [trust]
+// FKTee 单一配置：allow.list + config.toml [trust]
 const config = new FkteeConfig()
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = /* html */ `
@@ -131,7 +131,7 @@ mainMenu.on('menu-keybox-unknown', async () => await keybox.setUnknownKey())
 mainMenu.on('menu-keybox-local', async () => await keybox.setLocalKey())
 mainMenu.on('menu-keybox-repo', () => keyboxRepo.show())
 mainMenu.on('menu-add-system-app', () => dialogController.showSystemApp())
-mainMenu.on('menu-select-denylist', async () => appList.fetchDenyList())
+mainMenu.on('menu-select-denylist', async () => appList.fetchAllowList())
 mainMenu.on('menu-deselect-unnecessary', async () => appList.deselectUnnecessary())
 mainMenu.on('menu-props-conf', () => dialogController.showPropsConf())
 mainMenu.on('menu-default-policy', () => dialogController.showDefaultPolicy())

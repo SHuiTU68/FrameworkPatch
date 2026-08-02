@@ -26,7 +26,7 @@ copy_default() {
 copy_default config.toml    config.toml
 copy_default injector.toml  injector.toml
 copy_default hal.toml       hal.toml
-copy_default deny.list      deny.list
+copy_default allow.list     allow.list
 copy_default props.conf     props.conf
 copy_default usb.conf       usb.conf
 # keybox.xml: 只在用户没有时复制模块自带占位

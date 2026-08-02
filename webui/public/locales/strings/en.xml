@@ -145,7 +145,7 @@
     <string name="hal_hook_enabled">Hook enabled</string>
     <string name="hal_real_hal_instance">Real HAL instance</string>
     <string name="hal_keybox_path">Keybox path</string>
-    <string name="hal_deny_list_path">Deny list path</string>
+    <string name="hal_allow_list_path">Allow list path</string>
     <string name="hal_device">Device</string>
     <string name="hal_device_auto_hint">Empty field = auto (read from system props). Filled value = custom override.</string>
     <string name="hal_android_version">Android version</string>

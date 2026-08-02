@@ -4,7 +4,7 @@ import { i18n } from '../i18n'
 import type { Cli } from '../cli'
 import { File } from '../file'
 import { exec } from '../cli'
-import { HAL_ENABLED_FILE, INJECTOR_FILE, CONFIG_FILE, DENY_FILE, PROPS_FILE, USB_FILE, KEYBOX_FILE, HAL_FILE, PID_FKTEE, PID_INJECTOR, PID_HAL } from '../constant'
+import { HAL_ENABLED_FILE, INJECTOR_FILE, CONFIG_FILE, ALLOW_FILE, PROPS_FILE, USB_FILE, KEYBOX_FILE, HAL_FILE, PID_FKTEE, PID_INJECTOR, PID_HAL } from '../constant'
 import { keyboxStat } from '../config_fktee'
 import { applyDialogAnimation } from './animation'
 
@@ -85,7 +85,7 @@ export class StatusDialog {
       [i18n.t('status_config_files') + ' config.toml', CONFIG_FILE],
       [i18n.t('status_config_files') + ' injector.toml', INJECTOR_FILE],
       [i18n.t('status_config_files') + ' hal.toml', HAL_FILE],
-      [i18n.t('status_config_files') + ' deny.list', DENY_FILE],
+      [i18n.t('status_config_files') + ' allow.list', ALLOW_FILE],
       [i18n.t('status_config_files') + ' props.conf', PROPS_FILE],
       [i18n.t('status_config_files') + ' usb.conf', USB_FILE],
       [i18n.t('status_config_files') + ' keybox.xml', KEYBOX_FILE],

@@ -1,6 +1,6 @@
 import type { MdOutlinedTextField } from '@material/web/all'
 import { File } from './file'
-import { CONFIG_PATH, DENY_FILE } from './constant'
+import { CONFIG_PATH, ALLOW_FILE } from './constant'
 
 export interface Policy {
   verified_boot_state?: string
@@ -121,7 +121,7 @@ export const DEFAULT_POLICY_SCHEMA = new PolicySchema({
 
 export interface ConfigData {
   default_policy?: Policy
-  denyPackages?: string[]
+  allowPackages?: string[]
   [section: string]: Policy | string[] | undefined
 }
 
@@ -137,14 +137,14 @@ function parseConfig(raw: string): ConfigData {
     const sectionMatch = trimmed.match(/^\[(.+)\]$/)
     if (sectionMatch) {
       section = sectionMatch[1]
-      config[section] = section === 'denyPackages' ? [] : {}
+      config[section] = section === 'allowPackages' ? [] : {}
       continue
     }
 
     if (!section) continue
 
-    if (section === 'denyPackages') {
-      (config.denyPackages as string[]).push(trimmed)
+    if (section === 'allowPackages') {
+      (config.allowPackages as string[]).push(trimmed)
     } else {
       const eqIdx = trimmed.indexOf('=')
       if (eqIdx > 0) {
@@ -166,7 +166,7 @@ function serializeConfig(config: ConfigData): string {
     if (data === undefined) continue
     lines.push(`[${section}]`)
 
-    if (section === 'denyPackages' && Array.isArray(data)) {
+    if (section === 'allowPackages' && Array.isArray(data)) {
       for (const entry of data) {
         lines.push(entry)
       }
@@ -184,7 +184,7 @@ export class Config {
   readonly identity: string = 'TS'
 
   protected readonly CONFIG_PATH: string = CONFIG_PATH
-  protected readonly CONFIG_FILE: string = DENY_FILE
+  protected readonly CONFIG_FILE: string = ALLOW_FILE
 
   protected readonly perAppConfig: boolean = true
   protected readonly appMode: boolean = true
@@ -196,7 +196,7 @@ export class Config {
     if (import.meta.env.DEV) {
       this.#data = {
         default_policy: { verified_boot_state: 'green', device_locked: true, vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
-        denyPackages: [
+        allowPackages: [
           'io.github.vvb2060.keyattestation',
           'io.github.vvb2060.mahoshojo?',
           'com.google.android.gms!',
@@ -215,7 +215,7 @@ export class Config {
     } catch {
       this.#data = {
         default_policy: { verified_boot_state: 'green', device_locked: true, vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
-        denyPackages: [],
+        allowPackages: [],
       }
     }
   }
@@ -289,7 +289,7 @@ export class Config {
     }
 
     // 清理孤立的 per-app 策略
-    if (removed && section === 'denyPackages') {
+    if (removed && section === 'allowPackages') {
       const pkgName = removed.replace(/[!?]$/, '')
       delete this.#data[pkgName]
     }

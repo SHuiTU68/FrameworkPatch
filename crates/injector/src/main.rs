@@ -5,7 +5,7 @@
 //! 2. ptrace 远程 dlopen 注入 payload .so
 //! 3. 调用 payload 的 entry() 完成 binder ioctl hook 安装
 //!
-//! **全局 hook**：注入后所有走 keystore2 的应用都受影响，不再按应用白名单过滤。
+//! **白名单模式**：注入后仅对 `allow.list` 中列出的应用进行 attestation 伪造。
 
 mod config;
 mod hook;
@@ -59,25 +59,32 @@ fn main() -> Result<()> {
 
     // 加载配置
     let mut cfg = config::InjectorConfig::load(&config_path)?;
-    // 覆盖加载黑名单（deny.list，与 config_path 同目录）
-    let deny_path = config_path
+    // 覆盖加载白名单（allow.list，与 config_path 同目录）
+    let allow_path = config_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("/data/adb/Tee-rs"))
-        .join("deny.list");
-    cfg.load_deny_list(&deny_path);
+        .join("allow.list");
+    cfg.load_allow_list(&allow_path);
 
     if cfg.is_active() {
         log::info!(
-            "全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox（黑名单 {} 个包豁免）",
-            cfg.hook.deny_packages.len()
+            "白名单模式已启用：仅对 {} 个指定应用的 keystore2 attestation 使用本模块 keybox",
+            cfg.hook.allow_packages.len()
         );
+        if cfg.hook.allow_packages.is_empty() {
+            log::warn!("白名单为空：当前没有应用被伪造，请添加包名到 allow.list");
+        } else {
+            for pkg in &cfg.hook.allow_packages {
+                log::info!("  → 伪造: {pkg}");
+            }
+        }
     } else {
-        log::warn!("全局 hook 已禁用：注入仅完成 hook 安装，但不会伪造任何事务");
+        log::warn!("hook 已禁用：注入仅完成 hook 安装，但不会伪造任何事务");
     }
 
     // 执行 ptrace 远程 dlopen 注入
     inject::inject_library(target_pid, &payload_path)?;
 
-    log::info!("注入完成，全局 hook 已安装");
+    log::info!("注入完成，白名单 hook 已安装");
     Ok(())
 }

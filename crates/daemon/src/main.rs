@@ -26,17 +26,24 @@ fn main() -> Result<()> {
     // 加载配置
     let mut cfg = config::DaemonConfig::load(&config_dir.join("config.toml"))?;
     let mut injector_cfg = config::InjectorConfig::load(&config_dir.join("injector.toml"))?;
-    // 覆盖加载黑名单（deny.list）
-    injector_cfg.load_deny_list(&config_dir.join("deny.list"));
+    // 覆盖加载白名单（allow.list）
+    injector_cfg.load_allow_list(&config_dir.join("allow.list"));
 
     log::info!("后端模式: {:?}", cfg.backend.mode);
     if injector_cfg.is_active() {
         log::info!(
-            "全局 hook 已启用：所有应用的 keystore2 attestation 都将使用本模块 keybox（黑名单 {} 个包豁免）",
-            injector_cfg.hook.deny_packages.len()
+            "白名单模式已启用：仅对 {} 个指定应用进行 attestation 伪造",
+            injector_cfg.hook.allow_packages.len()
         );
+        if injector_cfg.hook.allow_packages.is_empty() {
+            log::warn!("白名单为空：当前没有应用被伪造，请添加包名到 allow.list");
+        } else {
+            for pkg in &injector_cfg.hook.allow_packages {
+                log::info!("  → 伪造: {pkg}");
+            }
+        }
     } else {
-        log::warn!("全局 hook 已禁用：所有事务透传，不伪造任何证书");
+        log::warn!("hook 已禁用：所有事务透传，不伪造任何证书");
     }
 
     // 加载 keybox
@@ -93,7 +100,7 @@ fn watch_config_changes(config_dir: &PathBuf) {
 
             // 只对特定配置文件的变化做反应，忽略日志/状态文件
             match name {
-                "config.toml" | "injector.toml" | "keybox.xml" | "deny.list" => {
+                "config.toml" | "injector.toml" | "keybox.xml" | "allow.list" => {
                     log::info!("配置文件变化，准备热重载: {name}");
                     // TODO: 重新加载配置并通知 server 线程
                     // 这里发送信号给 server 线程触发重载

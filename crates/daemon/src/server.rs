@@ -3,19 +3,19 @@
 //! 与注入到 keystore2 进程内的 payload 通信。完整的 binder RPC 实现需要
 //! rsbinder 或直接 binder ioctl，这里先写框架。
 //!
-//! 设计意图（后续实现）——**全局 hook + 黑名单模型**：
+//! 设计意图（后续实现）——**白名单模式**：
 //! 1. 创建 binder service（`IOhMyKsService` 或类似）。
 //! 2. 等待 payload 连接。
 //! 3. 处理来自 keystore2 的拦截事务。
 //! 4. 对每个事务：
 //!    - 全局开关关 → 透传。
-//!    - 调用方 uid 命中黑名单（解析 `/data/system/packages.list` 得到该 uid 的包名，
-//!      与 `deny_packages` 交集非空）→ 透传原始 attestation。
-//!    - 否则一律用 [`certgen`] 伪造证书链。
+//!    - 调用方 uid 不在白名单中（解析 `/data/system/packages.list` 得到该 uid 的
+//!      包名，不在 `allow_packages` 中）→ 透传原始 attestation。
+//!    - 否则用 [`certgen`] 伪造证书链。
 //!
 //! 这样做的理由：keystore2 是系统级单一服务，所有 App 的 attestation 请求
-//! 都汇聚到这里。在 keystore2 内部全局 hook，比逐 App 注入更彻底、更稳定，
-//! 也不会漏掉任何调用方；黑名单则用于保留个别敏感应用的真实证书。
+//! 都汇聚到这里。在 keystore2 内部进行白名单过滤，仅对指定应用伪造证书，
+//! 其余应用保持真实硬件证书。
 
 use crate::config::{DaemonConfig, InjectorConfig};
 use crate::keybox::KeyboxManager;
@@ -56,9 +56,16 @@ impl RpcServer {
         log::info!("注意：binder RPC 实现尚未完成，当前为框架模式");
         if self.injector_config.is_active() {
             log::info!(
-                "hook 已启用：全局模式，所有应用的 attestation 都将被伪造（黑名单 {} 个包豁免）",
-                self.injector_config.hook.deny_packages.len()
+                "白名单模式已启用：仅对 {} 个指定应用进行 attestation 伪造",
+                self.injector_config.hook.allow_packages.len()
             );
+            if self.injector_config.hook.allow_packages.is_empty() {
+                log::warn!("白名单为空：当前没有应用被伪造，请添加包名到 allow.list");
+            } else {
+                for pkg in &self.injector_config.hook.allow_packages {
+                    log::info!("  → 伪造: {pkg}");
+                }
+            }
         } else {
             log::warn!("hook 已禁用：所有事务透传，不伪造任何证书");
         }
@@ -74,7 +81,7 @@ impl RpcServer {
         // 2. 等待 payload 连接
         // 3. 处理来自 keystore2 的拦截事务：
         //    a. 若 !injector_config.is_active() → 透传
-        //    b. 若 uid_denied(uid) → 透传（黑名单豁免）
+        //    b. 若 !uid_allowed(uid) → 透传（不在白名单中）
         //    c. 否则用 certgen 伪造证书链
 
         // 保持运行
@@ -85,9 +92,9 @@ impl RpcServer {
 
     /// 处理 keystore2 事务。
     ///
-    /// 全局 + 黑名单模型：
+    /// 白名单模式：
     /// - 全局开关关 → 透传。
-    /// - 调用方 uid 命中黑名单 → 透传。
+    /// - 调用方 uid 不在白名单 → 透传。
     /// - 否则按 code 分发伪造。
     #[allow(dead_code)]
     fn handle_transaction(&self, code: u32, uid: u32, data: &[u8]) -> Result<Vec<u8>> {
@@ -95,9 +102,9 @@ impl RpcServer {
         if !self.injector_config.is_active() {
             return Ok(data.to_vec());
         }
-        // 黑名单豁免：解析 uid 对应包名，命中则透传
-        if self.uid_denied(uid) {
-            log::debug!("uid {uid} 命中黑名单，透传事务 code={code}");
+        // 白名单检查：uid 不在白名单中则透传
+        if !self.uid_allowed(uid) {
+            log::debug!("uid {uid} 不在白名单中，透传事务 code={code}");
             return Ok(data.to_vec());
         }
         // 根据 code 分发到具体处理函数
@@ -107,27 +114,27 @@ impl RpcServer {
         bail!("事务处理逻辑尚未实现（RPC 框架占位）")
     }
 
-    /// 判断调用方 uid 是否命中黑名单。
+    /// 判断调用方 uid 是否在白名单中。
     ///
     /// 解析 `/data/system/packages.list`（格式：`pkg uid ...`），收集该 uid 的
-    /// 所有包名，与 `deny_packages` 求交集。任一命中即豁免。
-    /// 文件不可读 / 解析失败时保守返回 `false`（不豁免，继续伪造）——
-    /// 因为黑名单是“可选的安全网”，解析失败不应导致全盘透传。
+    /// 所有包名，与 `allow_packages` 求交集。任一匹配即允许伪造。
+    /// 文件不可读 / 解析失败时保守返回 `false`（不伪造，继续透传）——
+    /// 因为白名单是"授权列表"，解析失败不应导致全盘伪造。
     #[allow(dead_code)]
-    fn uid_denied(&self, uid: u32) -> bool {
-        if self.injector_config.hook.deny_packages.is_empty() {
+    fn uid_allowed(&self, uid: u32) -> bool {
+        if self.injector_config.hook.allow_packages.is_empty() {
             return false;
         }
-        let deny: HashSet<&str> = self
+        let allow: HashSet<&str> = self
             .injector_config
             .hook
-            .deny_packages
+            .allow_packages
             .iter()
             .map(String::as_str)
             .collect();
         packages_for_uid(Path::new("/data/system/packages.list"), uid)
             .iter()
-            .any(|pkg| deny.contains(pkg.as_str()))
+            .any(|pkg| allow.contains(pkg.as_str()))
     }
 
     /// 处理 `generateKey` 事务：用 certgen 生成密钥对 + 伪造证书链。

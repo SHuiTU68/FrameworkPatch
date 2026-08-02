@@ -1,11 +1,11 @@
-// FKTee 配置：覆盖基类 Config 的 read/write，把 denyPackages 映射到
-// /data/adb/Tee-rs/deny.list（纯包名列表），把 default_policy + per-app
+// FKTee 配置：覆盖基类 Config 的 read/write，把 allowPackages 映射到
+// /data/adb/Tee-rs/allow.list（纯包名列表），把 default_policy + per-app
 // 策略映射到 config.toml 的 [trust] / [<package>] 段。
 // injector.toml / hal.toml 的直接编辑由 ConfigDialog / HalDialog 处理。
 import { parse, stringify } from 'smol-toml'
 import { File } from './file'
 import { Config, type ConfigData, type Policy } from './config'
-import { CONFIG_FILE, DENY_FILE, HAL_FILE, INJECTOR_FILE, KEYBOX_FILE, CONFIG_PATH } from './constant'
+import { CONFIG_FILE, ALLOW_FILE, HAL_FILE, INJECTOR_FILE, KEYBOX_FILE, CONFIG_PATH } from './constant'
 
 export type Toml = Record<string, unknown>
 
@@ -19,12 +19,12 @@ export class FkteeConfig extends Config {
     return CONFIG_PATH
   }
 
-  // 读取 deny.list + config.toml，合并到 ConfigData
+  // 读取 allow.list + config.toml，合并到 ConfigData
   override async read(): Promise<void> {
     if (import.meta.env.DEV) {
       this.set({
         default_policy: { verified_boot_state: 'green', device_locked: true, vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
-        denyPackages: [
+        allowPackages: [
           'io.github.vvb2060.keyattestation',
           'io.github.vvb2060.mahoshojo?',
           'com.google.android.gms!',
@@ -38,10 +38,10 @@ export class FkteeConfig extends Config {
       return
     }
 
-    const denyPackages = await readDenyList()
+    const allowPackages = await readAllowList()
     const cfg = await readToml(CONFIG_FILE)
 
-    const data: ConfigData = { denyPackages }
+    const data: ConfigData = { allowPackages }
 
     // [trust] -> default_policy
     const trust = cfg.trust as Toml | undefined
@@ -60,12 +60,12 @@ export class FkteeConfig extends Config {
     this.set(data)
   }
 
-  // 写入 deny.list + config.toml
+  // 写入 allow.list + config.toml
   override async write(): Promise<void> {
     const data = this.get()
 
-    // 1. 写 deny.list
-    await writeDenyList(data.denyPackages ?? [])
+    // 1. 写 allow.list
+    await writeAllowList(data.allowPackages ?? [])
 
     // 2. 写 config.toml：先读现有内容（保留 [backend]/[crypto]/[log] 等段）
     const cfg = await readToml(CONFIG_FILE)
@@ -83,7 +83,7 @@ export class FkteeConfig extends Config {
       delete cfg[key]
     }
     for (const [key, val] of Object.entries(data)) {
-      if (key === 'denyPackages' || key === 'default_policy') continue
+      if (key === 'allowPackages' || key === 'default_policy') continue
       if (val && typeof val === 'object' && !Array.isArray(val)) {
         cfg[key] = { ...(val as Policy) }
       }
@@ -115,11 +115,11 @@ export const readConfigToml = (): Promise<Toml> => readToml(CONFIG_FILE)
 export const readInjectorToml = (): Promise<Toml> => readToml(INJECTOR_FILE)
 export const readHalToml = (): Promise<Toml> => readToml(HAL_FILE)
 
-// 读取 deny.list：每行一个包名，# 与空行忽略（可能带 ! / ? 后缀表示模式）
-export async function readDenyList(): Promise<string[]> {
+// 读取 allow.list：每行一个包名，# 与空行忽略（可能带 ! / ? 后缀表示模式）
+export async function readAllowList(): Promise<string[]> {
   if (import.meta.env.DEV) return []
   try {
-    const raw = await File.read(DENY_FILE)
+    const raw = await File.read(ALLOW_FILE)
     return raw.split('\n')
       .map(line => line.trim())
       .filter(line => line.length > 0 && !line.startsWith('#'))
@@ -128,10 +128,10 @@ export async function readDenyList(): Promise<string[]> {
   }
 }
 
-// 写入 deny.list：每行一个条目
-export async function writeDenyList(packages: string[]): Promise<void> {
+// 写入 allow.list：每行一个条目
+export async function writeAllowList(packages: string[]): Promise<void> {
   const raw = packages.length > 0 ? packages.join('\n') + '\n' : ''
-  await File.write(DENY_FILE, raw)
+  await File.write(ALLOW_FILE, raw)
 }
 
 // keybox.xml 状态：是否存在 + 字节数

@@ -99,11 +99,11 @@ export class AppList {
   }
 
   syncSystemAppsWithConfig(): void {
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
     const additionalApps = this.getAdditionalApps()
     let changed = false
 
-    for (const raw of denyPackages) {
+    for (const raw of allowPackages) {
       const pkg = stripSuffix(raw)
       const entry = this.#entries.find(e => e.packageName === pkg)
       if (entry?.isSystem && !additionalApps.includes(pkg)) {
@@ -119,11 +119,11 @@ export class AppList {
 
   #syncCheckboxes(): void {
     if (!this.#container) return
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
     this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
       const pkg = card.dataset.package!
       const checkbox = card.querySelector('md-checkbox')!
-      const raw = denyPackages.find(t => stripSuffix(t) === pkg)
+      const raw = allowPackages.find(t => stripSuffix(t) === pkg)
       const targeted = raw !== undefined
 
       checkbox.checked = targeted
@@ -136,11 +136,11 @@ export class AppList {
 
   selectAll(): void {
     if (!this.#container) return
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
     this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
       const pkg = card.dataset.package!
-      if (!denyPackages.some(t => stripSuffix(t) === pkg)) {
-        this.#config.push('denyPackages', pkg)
+      if (!allowPackages.some(t => stripSuffix(t) === pkg)) {
+        this.#config.push('allowPackages', pkg)
       }
       card.querySelector('md-checkbox')!.checked = true
       card.classList.add('selected')
@@ -149,7 +149,7 @@ export class AppList {
 
   deselectAll(): void {
     if (!this.#container) return
-    this.#config.set('denyPackages', [])
+    this.#config.set('allowPackages', [])
     this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
       const checkbox = card.querySelector('md-checkbox')!
       checkbox.checked = false
@@ -157,12 +157,12 @@ export class AppList {
     })
   }
 
-  async fetchDenyList(): Promise<void> {
-    const denylist = await this.#cli.getMagiskDenyList()
-    if (denylist.length < 1) return
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
-    for (const pkg of denylist) {
-      if (!denyPackages.includes(pkg)) this.#config.push('denyPackages', pkg)
+  async fetchAllowList(): Promise<void> {
+    const allowlist = await this.#cli.getMagiskDenyList()
+    if (allowlist.length < 1) return
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
+    for (const pkg of allowlist) {
+      if (!allowPackages.includes(pkg)) this.#config.push('allowPackages', pkg)
     }
     this.#syncCheckboxes()
   }
@@ -195,12 +195,12 @@ export class AppList {
       const xposedList = await this.#cli.getXposedList()
       const unnecessaryApps = new Set([...excludeList, ...xposedList])
 
-      const denyPackages = (this.#config.get('denyPackages') as string[]) || []
-      const filtered = denyPackages.filter(t => {
+      const allowPackages = (this.#config.get('allowPackages') as string[]) || []
+      const filtered = allowPackages.filter(t => {
         const pkg = t.endsWith('!') || t.endsWith('?') ? t.slice(0, -1) : t
         return !unnecessaryApps.has(pkg)
       })
-      this.#config.set({ ...this.#config.get(), denyPackages: filtered })
+      this.#config.set({ ...this.#config.get(), allowPackages: filtered })
       this.#syncCheckboxes()
     } catch (error) {
       console.error('Failed to deselect unnecessary apps:', error)
@@ -216,18 +216,18 @@ export class AppList {
       e => !e.isSystem || additionalApps.includes(e.packageName),
     )
 
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
 
     displayed.sort((a, b) => {
-      const aTargeted = denyPackages.some(t => stripSuffix(t) === a.packageName)
-      const bTargeted = denyPackages.some(t => stripSuffix(t) === b.packageName)
+      const aTargeted = allowPackages.some(t => stripSuffix(t) === a.packageName)
+      const bTargeted = allowPackages.some(t => stripSuffix(t) === b.packageName)
       if (aTargeted !== bTargeted) return aTargeted ? -1 : 1
       return (a.appName || '').localeCompare(b.appName || '')
     })
 
     const fragment = document.createDocumentFragment()
     for (const entry of displayed) {
-      const raw = denyPackages.find(t => stripSuffix(t) === entry.packageName)
+      const raw = allowPackages.find(t => stripSuffix(t) === entry.packageName)
       const targeted = raw !== undefined
       const mode = targeted && raw!.endsWith('!') ? 'generate' : targeted && raw!.endsWith('?') ? 'hack' : 'auto'
       fragment.appendChild(this.#createCard(entry, targeted, mode))
@@ -327,16 +327,16 @@ export class AppList {
         if (this.menuOpen) return
         const pkg = card.dataset.package!
         const checkbox = card.querySelector('md-checkbox')!
-        const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+        const allowPackages = (this.#config.get('allowPackages') as string[]) || []
 
         if (checkbox.checked) {
-          const idx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
-          if (idx >= 0) this.#config.removeMatch('denyPackages', t => stripSuffix(t) === pkg)
+          const idx = allowPackages.findIndex(t => stripSuffix(t) === pkg)
+          if (idx >= 0) this.#config.removeMatch('allowPackages', t => stripSuffix(t) === pkg)
           checkbox.checked = false
           card.classList.remove('selected')
           checkbox.classList.remove('checkbox-checked-generated', 'checkbox-checked-hack')
         } else {
-          this.#config.push('denyPackages', pkg)
+          this.#config.push('allowPackages', pkg)
           checkbox.checked = true
           card.classList.add('selected')
         }
@@ -366,18 +366,18 @@ export class AppList {
   async saveSystemAppSelection(checkedApps: string[]): Promise<void> {
     this.saveAdditionalApps(checkedApps)
 
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
     const systemEntries = this.#entries.filter(e => e.isSystem)
 
     for (const entry of systemEntries) {
       const pkg = entry.packageName
-      const targetIdx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
+      const targetIdx = allowPackages.findIndex(t => stripSuffix(t) === pkg)
       const isChecked = checkedApps.includes(pkg)
 
       if (isChecked && targetIdx === -1) {
-        this.#config.push('denyPackages', pkg)
+        this.#config.push('allowPackages', pkg)
       } else if (!isChecked && targetIdx !== -1) {
-        this.#config.removeMatch('denyPackages', t => stripSuffix(t) === pkg)
+        this.#config.removeMatch('allowPackages', t => stripSuffix(t) === pkg)
       }
     }
     await this.refresh(false)
@@ -493,14 +493,14 @@ export class AppList {
       const radios = dialog.querySelectorAll<MdRadio>('md-radio')
       const selectedRadio = Array.from(radios).find(r => r.checked)
       const modeValue = selectedRadio?.value ?? 'auto'
-      const denyPackages = (this.#config.get('denyPackages') as string[]) || []
-      const idx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
+      const allowPackages = (this.#config.get('allowPackages') as string[]) || []
+      const idx = allowPackages.findIndex(t => stripSuffix(t) === pkg)
 
       checkbox.classList.remove('checkbox-checked-generated', 'checkbox-checked-hack')
 
       if (idx >= 0) {
         const newValue = modeValue === 'generate' ? `${pkg}!` : modeValue === 'hack' ? `${pkg}?` : pkg
-        this.#config.replaceMatch('denyPackages', t => stripSuffix(t) === pkg, newValue)
+        this.#config.replaceMatch('allowPackages', t => stripSuffix(t) === pkg, newValue)
 
         if (modeValue === 'generate') checkbox.classList.add('checkbox-checked-generated')
         else if (modeValue === 'hack') checkbox.classList.add('checkbox-checked-hack')
@@ -529,8 +529,8 @@ export class AppList {
     const appName = card.querySelector('.app-name')?.textContent ?? pkg
     appNameDisplay.innerHTML = `${appName}<br>${pkg}`
 
-    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
-    const raw = denyPackages.find(t => stripSuffix(t) === pkg)
+    const allowPackages = (this.#config.get('allowPackages') as string[]) || []
+    const raw = allowPackages.find(t => stripSuffix(t) === pkg)
     const mode = raw?.endsWith('!') ? 'generate' : raw?.endsWith('?') ? 'hack' : 'auto'
 
     const radios = dialog.querySelectorAll<MdRadio & { checked?: boolean }>('md-radio')
@@ -562,8 +562,8 @@ export class AppList {
   // Debug
   #initDevMode(): void {
     const configData = this.#config.get()
-    if (!configData.denyPackages || configData.denyPackages.length === 0) {
-      configData.denyPackages = [
+    if (!configData.allowPackages || configData.allowPackages.length === 0) {
+      configData.allowPackages = [
         'io.github.vvb2060.keyattestation',
         'io.github.vvb2060.mahoshojo?',
         'com.google.android.gms!',
