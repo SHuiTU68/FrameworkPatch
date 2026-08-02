@@ -32,9 +32,7 @@ const ANDROID_LOG_ERROR: c_int = 6;
 ///
 /// 被 inject 二进制通过远程 dlsym + 远程调用执行。
 /// handle 是 android_dlopen_ext 返回的 .so handle。
-/// 使用 `#[used]` 防止编译器优化掉这个符号。
 #[no_mangle]
-#[used]
 pub extern "C" fn entry(_handle: *mut c_void) {
     // 初始化日志（运行时查找 __android_log_print）
     init_logging();
