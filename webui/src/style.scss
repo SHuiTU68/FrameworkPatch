@@ -34,25 +34,6 @@ body {
   padding: 0 8px;
 }
 
-.title-main {
-  font-weight: 500;
-}
-
-.title-sub {
-  font-size: 0.8em;
-  opacity: 0.7;
-}
-
-.deny-hint {
-  width: calc(100% - 32px);
-  max-width: 900px;
-  padding: 8px 16px;
-  margin-bottom: 8px;
-  box-sizing: border-box;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 0.9em;
-}
-
 .search-hide {
   transition: opacity 0.3s ease;
 
@@ -86,6 +67,39 @@ body {
   align-items: center;
 }
 
+.update {
+  width: calc(100% - 32px);
+  max-width: 900px;
+  background-color: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+  padding: 16px;
+  border-radius: 20px;
+  box-sizing: border-box;
+  margin-bottom: 16px;
+  position: relative;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+
+  &.hide {
+    display: none;
+  }
+
+  .update-text {
+    display: flex;
+    flex-direction: column;
+    
+    span {
+      font-weight: 500;
+    }
+
+    em {
+      font-size: 0.9em;
+    }
+  }
+}
+
 .loading {
   height: calc(100vh - var(--top-inset) - 64px - 8px);
   padding-bottom: calc(var(--top-inset) + 64px + 8px);
@@ -94,6 +108,18 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+.uninstall {
+  width: calc(100% - 32px);
+  max-width: 900px;
+  margin-top: 16px;
+
+  md-filled-button {
+    width: 100%;
+    --md-sys-color-primary: var(--md-sys-color-error);
+    --md-sys-color-on-primary: var(--md-sys-color-on-error);
+  }
 }
 
 .bottom-safe-inset {
@@ -151,9 +177,4 @@ body {
 
 [dir="rtl"] [flip-icon-in-rtl="true"] {
   transform: scaleX(-1);
-}
-
-#load-error {
-  padding: 24px;
-  color: var(--md-sys-color-error);
 }

@@ -8,34 +8,6 @@
 
   .full-width-button {
     width: 100%;
-    margin-top: 8px;
-  }
-
-  .cfg-section-title {
-    font-size: 0.95em;
-    font-weight: 500;
-    color: var(--md-sys-color-on-surface-variant);
-    margin: 16px 0 8px;
-    user-select: none;
-
-    &:first-child {
-      margin-top: 0;
-    }
-  }
-
-  .text-field-dialog {
-    --md-dialog-container-color: var(--md-sys-color-surface-container-high);
-
-    [slot="content"] {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    md-outlined-text-field,
-    md-outlined-select {
-      width: 100%;
-    }
   }
 
   #about-dialog {
@@ -85,6 +57,10 @@
       gap: 8px;
       flex-wrap: wrap;
     }
+
+    #channel-selector {
+      width: 100%;
+    }
   }
 
   #module_name_line1 {
@@ -119,9 +95,24 @@
     user-select: none;
   }
 
+  #telegram {
+    --md-sys-color-primary: #38A7ED;
+    --md-sys-color-on-primary: white;
+  }
+
   #github {
     --md-sys-color-primary: var(--md-sys-color-inverse-surface);
     --md-sys-color-on-primary: var(--md-sys-color-inverse-on-surface);
+  }
+
+  #canary {
+    --md-sys-color-primary: #821284;
+    --md-sys-color-on-primary: white;
+  }
+
+  #locales {
+    --md-sys-color-primary: #4285F4;
+    --md-sys-color-on-primary: white;
   }
 
   .help-content {
@@ -153,7 +144,7 @@
     position: relative;
     padding: 16px;
     box-sizing: border-box;
-    font-size: 1.1em;
+    font-size: 1.2em;
     user-select: none;
 
     &.contrast {
@@ -173,119 +164,15 @@
     }
   }
 
-  #prop-dialog,
-  #config-dialog,
-  #hal-dialog,
-  #usb-dialog,
-  #status-dialog,
-  #restart-dialog,
-  #keybox-paste-dialog {
+  #prop-dialog {
     [slot="content"] {
       display: flex;
       flex-direction: column;
-      gap: 12px;
-    }
-  }
-
-  .prop-rules {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    max-height: 50vh;
-    overflow-y: auto;
-  }
-
-  .prop-rule {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-    border-radius: 12px;
-    background-color: var(--md-sys-color-surface-container);
-
-    .prop-rule-fields {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-
-      md-outlined-text-field {
-        width: 100%;
-      }
+      gap: 16px;
     }
 
-    .prop-rule-actions {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .prop-once-label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.85em;
-      color: var(--md-sys-color-on-surface-variant);
-      user-select: none;
-    }
-  }
-
-  .hal-hint,
-  .restart-hint {
-    font-size: 0.85em;
-    color: var(--md-sys-color-on-surface-variant);
-    line-height: 1.5;
-  }
-
-  .restart-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-
-    md-filled-button,
-    md-filled-tonal-button {
-      flex: 1 1 40%;
-    }
-  }
-
-  #status-dialog {
-    .status-rows {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--md-sys-color-outline-variant);
-      font-size: 0.95em;
-      gap: 12px;
-
-      &:last-child {
-        border-bottom: none;
-      }
-    }
-
-    .status-label {
-      color: var(--md-sys-color-on-surface-variant);
-      word-break: break-all;
-    }
-
-    .status-value {
-      font-weight: 500;
-      white-space: nowrap;
-
-      &.ok {
-        color: #2e7d32;
-      }
-
-      &.warn {
-        color: var(--md-sys-color-error);
-      }
+    #boot-hash-input {
+      width: 100%;
     }
   }
 
@@ -396,8 +283,19 @@
       }
     }
   }
-}
 
+  #update-dialog {
+    .update-actions {
+      display: flex;
+      gap: 8px;
+
+      .hide {
+        display: none;
+      }
+    }
+  }
+
+}
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }

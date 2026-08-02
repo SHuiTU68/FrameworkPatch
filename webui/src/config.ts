@@ -1,8 +1,13 @@
-// 配置抽象：schema 驱动表单元数据 + deny.list 读写基类
+import type { MdOutlinedTextField } from '@material/web/all'
 import { File } from './file'
-import { DENY_FILE } from './constant'
+import { CONFIG_PATH, DENY_FILE } from './constant'
 
 export interface Policy {
+  verified_boot_state?: string
+  device_locked?: boolean
+  vb_key?: string
+  vb_hash?: string
+  security_patch?: string
   [key: string]: string | boolean | undefined
 }
 
@@ -32,7 +37,6 @@ export interface ButtonFieldMeta {
 
 export type PolicyFieldMeta = TextFieldMeta | BooleanFieldMeta | ButtonFieldMeta
 
-// snake_case → Title Case 标签
 export function snakeToLabel(key: string): string {
   return key
     .replace(/_/g, ' ')
@@ -73,72 +77,176 @@ export class PolicySchema {
   }
 }
 
+// FKTee [trust] 段策略 schema（对应 config.toml [trust] 字段）
+export const DEFAULT_POLICY_SCHEMA = new PolicySchema({
+  verified_boot_state: {
+    defaultValue: 'green',
+    options: ['green', 'yellow', 'orange', 'red'],
+    placeholder: 'green | yellow | orange | red',
+    validate: (v) => !v || ['green', 'yellow', 'orange', 'red'].includes(v) || 'green | yellow | orange | red',
+  },
+  device_locked: {
+    type: 'boolean',
+    label: 'config_device_locked',
+    defaultValue: true,
+  },
+  vb_key: {
+    defaultValue: 'auto',
+    options: ['auto', 'random'],
+    placeholder: 'auto | random | <hex>',
+    validate: (v) => !v || v === 'auto' || v === 'random' || /^[0-9a-fA-F]+$/.test(v) || 'auto | random | <hex>',
+  },
+  vb_hash: {
+    defaultValue: 'auto',
+    options: ['auto', 'random'],
+    placeholder: 'auto | random | <hex>',
+    validate: (v) => !v || v === 'auto' || v === 'random' || /^[0-9a-fA-F]+$/.test(v) || 'auto | random | <hex>',
+  },
+  security_patch: {
+    defaultValue: 'auto',
+    options: ['auto', 'latest'],
+    placeholder: 'auto | latest | YYYY-MM-DD',
+    validate: (v) => !v || v === 'auto' || v === 'latest' || /^\d{4}-\d{2}-\d{2}$/.test(v) || 'auto | latest | YYYY-MM-DD',
+  },
+  _today: {
+    type: 'button',
+    label: 'functional_button_today',
+    onClick: () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const el = document.querySelector<MdOutlinedTextField>('.policy-security_patch')
+      if (el) el.value = today
+    },
+  },
+})
+
 export interface ConfigData {
+  default_policy?: Policy
   denyPackages?: string[]
-  [section: string]: string[] | undefined
+  [section: string]: Policy | string[] | undefined
 }
 
-// deny.list 解析：每行一个包名，# 与空行跳过
-function parseDenyList(raw: string): string[] {
-  const list: string[] = []
+// 解析 config.ini 风格的配置（基类兼容用，FkteeConfig 重写了 read/write）
+function parseConfig(raw: string): ConfigData {
+  const config: ConfigData = {}
+  let section: string | null = null
+
   for (const line of raw.split('\n')) {
-    const t = line.trim()
-    if (!t || t.startsWith('#')) continue
-    list.push(t)
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+
+    const sectionMatch = trimmed.match(/^\[(.+)\]$/)
+    if (sectionMatch) {
+      section = sectionMatch[1]
+      config[section] = section === 'denyPackages' ? [] : {}
+      continue
+    }
+
+    if (!section) continue
+
+    if (section === 'denyPackages') {
+      (config.denyPackages as string[]).push(trimmed)
+    } else {
+      const eqIdx = trimmed.indexOf('=')
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim()
+        const value = trimmed.slice(eqIdx + 1).trim()
+        const sectionData = config[section] as Record<string, string>
+        sectionData[key] = value
+      }
+    }
   }
-  return list
+
+  return config
+}
+
+function serializeConfig(config: ConfigData): string {
+  const lines: string[] = []
+
+  for (const [section, data] of Object.entries(config)) {
+    if (data === undefined) continue
+    lines.push(`[${section}]`)
+
+    if (section === 'denyPackages' && Array.isArray(data)) {
+      for (const entry of data) {
+        lines.push(entry)
+      }
+    } else if (typeof data === 'object') {
+      for (const [key, value] of Object.entries(data as Record<string, string | boolean>)) {
+        lines.push(`${key} = ${value}`)
+      }
+    }
+  }
+
+  return lines.join('\n')
 }
 
 export class Config {
-  readonly identity: string = 'FKTee'
+  readonly identity: string = 'TS'
 
-  protected readonly CONFIG_PATH: string = '/data/adb/Tee-rs'
-  protected readonly DENY_FILE: string = DENY_FILE
+  protected readonly CONFIG_PATH: string = CONFIG_PATH
+  protected readonly CONFIG_FILE: string = DENY_FILE
+
+  protected readonly perAppConfig: boolean = true
+  protected readonly appMode: boolean = true
 
   #data: ConfigData = {}
+  readonly policySchema: PolicySchema = DEFAULT_POLICY_SCHEMA
 
   async read(): Promise<void> {
     if (import.meta.env.DEV) {
       this.#data = {
+        default_policy: { verified_boot_state: 'green', device_locked: true, vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
         denyPackages: [
           'io.github.vvb2060.keyattestation',
+          'io.github.vvb2060.mahoshojo?',
+          'com.google.android.gms!',
           'com.example.banking',
+          'com.example.wallet!',
+          'com.example.social?',
         ],
+        'com.google.android.gms': { vb_key: 'auto', vb_hash: '241890bd44131d34c077cb01a0c3ea1ff68533b21e9d83b3f3adca6663c3d443', security_patch: '2026-05-05' },
+        'com.example.banking': { vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
       }
       return
     }
     try {
-      const raw = await File.read(this.DENY_FILE)
-      this.#data = { denyPackages: parseDenyList(raw) }
+      const raw = await File.read(this.CONFIG_FILE)
+      this.#data = parseConfig(raw)
     } catch {
-      this.#data = { denyPackages: [] }
+      this.#data = {
+        default_policy: { verified_boot_state: 'green', device_locked: true, vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto' },
+        denyPackages: [],
+      }
     }
   }
 
   async write(): Promise<void> {
-    const list = this.#data.denyPackages ?? []
-    // 去重并排序，保留可读性
-    const uniq = [...new Set(list)]
-    const raw = uniq.join('\n') + (uniq.length ? '\n' : '')
-    await File.write(this.DENY_FILE, raw)
+    const raw = serializeConfig(this.#data)
+    await File.write(this.CONFIG_FILE, raw)
   }
 
   get(): ConfigData
-  get(section: string): string[] | undefined
-  get(section?: string): ConfigData | string[] | undefined {
+  get(section: string): Policy | string[] | undefined
+  get(section?: string): ConfigData | Policy | string[] | undefined {
     if (section === undefined) return this.#data
     return this.#data[section]
   }
 
   set(data: ConfigData): void
-  set(section: string, value: string[] | undefined): void
-  set(section: string | ConfigData, value?: string[] | undefined): void {
+  set(section: string, key: string, value: string): void
+  set(section: string, value: string[] | Policy | undefined): void
+  set(section: string | ConfigData, key?: string | string[] | Policy, value?: string): void {
     if (typeof section === 'object') {
       this.#data = section
-    } else if (value === undefined) {
+    } else if (value !== undefined) {
+      if (!(section in this.#data) || Array.isArray(this.#data[section])) {
+        this.#data[section] = {}
+      }
+      (this.#data[section] as Record<string, string>)[key as string] = value
+    } else if (key === undefined) {
       delete this.#data[section]
     } else {
-      this.#data[section] = value
+      this.#data[section] = key as string[] | Policy
     }
   }
 
@@ -160,22 +268,44 @@ export class Config {
   }
 
   push(section: string, value: string): void {
-    if (!Array.isArray(this.#data[section])) {
+    if (!(section in this.#data) || !Array.isArray(this.#data[section])) {
       this.#data[section] = []
     }
-    ;(this.#data[section] as string[]).push(value)
+    (this.#data[section] as string[]).push(value)
   }
 
   pop(section: string, value?: string): string | undefined {
     const arr = this.#data[section]
     if (!Array.isArray(arr)) return undefined
-    if (value === undefined) return arr.pop()
-    const idx = arr.indexOf(value)
-    if (idx !== -1) return arr.splice(idx, 1)[0]
-    return undefined
+
+    let removed: string | undefined
+    if (value === undefined) {
+      removed = arr.pop()
+    } else {
+      const idx = arr.indexOf(value)
+      if (idx !== -1) {
+        removed = arr.splice(idx, 1)[0]
+      }
+    }
+
+    // 清理孤立的 per-app 策略
+    if (removed && section === 'denyPackages') {
+      const pkgName = removed.replace(/[!?]$/, '')
+      delete this.#data[pkgName]
+    }
+
+    return removed
   }
 
   get configPath(): string {
     return this.CONFIG_PATH
+  }
+
+  get supportsPerAppConfig(): boolean {
+    return this.perAppConfig
+  }
+
+  get supportsAppMode(): boolean {
+    return this.appMode
   }
 }

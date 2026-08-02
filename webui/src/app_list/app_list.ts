@@ -1,16 +1,21 @@
-// 黑名单 app picker：列出全部应用，勾选 = 写入 deny.list（豁免 attestation hook）
 import { listPackages, getPackagesInfo } from 'kernelsu-alt'
 import type { PackagesInfo } from 'kernelsu-alt'
+import type { MdDialog, MdRadio } from '@material/web/all'
+import { Cli } from '../cli'
 import { Config } from '../config'
-import { LOCAL_STORAGE_PREFIX } from '../constant'
+import { i18n } from '../i18n'
+import { GITHUB_REPO, LOCAL_STORAGE_PREFIX } from '../constant'
+import { applyDialogAnimation } from '../dialog/animation'
+import { PolicyEditor } from './policy'
 import './app_list.scss'
 
 const SYSTEM_APPS_KEY = `${LOCAL_STORAGE_PREFIX}AdditionalApps`
-// 默认额外显示的系统应用（play 服务/商店等常需加入黑名单）
 const DEFAULT_ADDITIONAL_APPS = [
   'com.google.android.gms', // Play Service
   'com.android.vending',    // Play Store
-  'com.google.android.gsf', // Google Services Framework
+  'com.oplus.deepthinker',
+  'com.heytap.speechassist',
+  'com.coloros.sceneservice',
 ]
 
 export interface AppEntry {
@@ -19,16 +24,24 @@ export interface AppEntry {
   isSystem: boolean
 }
 
+function stripSuffix(pkg: string): string {
+  return pkg.endsWith('!') || pkg.endsWith('?') ? pkg.slice(0, -1) : pkg
+}
+
 export class AppList {
   #entries: AppEntry[] = []
   #config: Config
+  #cli: Cli
   #iconObserver: IntersectionObserver | null = null
   #systemAppIconObserver: IntersectionObserver | null = null
+  #currentModeCard: HTMLElement | null = null
   #container: HTMLElement | null = null
+  #policyEditor!: PolicyEditor
   menuOpen = false
 
-  constructor(config: Config) {
+  constructor(config: Config, cli: Cli) {
     this.#config = config
+    this.#cli = cli
   }
 
   async fetch(): Promise<void> {
@@ -81,16 +94,17 @@ export class AppList {
       if (this.#container) {
         this.renderAppList(this.#container)
       }
+      this.#syncCheckboxes()
     }
   }
 
-  // 把已存在于黑名单中的系统应用同步进 additionalApps，使其可见
   syncSystemAppsWithConfig(): void {
-    const deny = (this.#config.get('denyPackages') as string[]) || []
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
     const additionalApps = this.getAdditionalApps()
     let changed = false
 
-    for (const pkg of deny) {
+    for (const raw of denyPackages) {
+      const pkg = stripSuffix(raw)
       const entry = this.#entries.find(e => e.packageName === pkg)
       if (entry?.isSystem && !additionalApps.includes(pkg)) {
         additionalApps.push(pkg)
@@ -103,18 +117,34 @@ export class AppList {
     }
   }
 
-  selectAll(): void {
+  #syncCheckboxes(): void {
     if (!this.#container) return
-    const additionalApps = this.getAdditionalApps()
-    const deny = (this.#config.get('denyPackages') as string[]) || []
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
     this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
       const pkg = card.dataset.package!
-      // 仅当前可见的应用参与全选
-      if (!deny.includes(pkg)) this.#config.push('denyPackages', pkg)
+      const checkbox = card.querySelector('md-checkbox')!
+      const raw = denyPackages.find(t => stripSuffix(t) === pkg)
+      const targeted = raw !== undefined
+
+      checkbox.checked = targeted
+      card.classList.toggle('selected', targeted)
+      checkbox.classList.remove('checkbox-checked-generated', 'checkbox-checked-hack')
+      if (targeted && raw!.endsWith('!')) checkbox.classList.add('checkbox-checked-generated')
+      else if (targeted && raw!.endsWith('?')) checkbox.classList.add('checkbox-checked-hack')
+    })
+  }
+
+  selectAll(): void {
+    if (!this.#container) return
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
+      const pkg = card.dataset.package!
+      if (!denyPackages.some(t => stripSuffix(t) === pkg)) {
+        this.#config.push('denyPackages', pkg)
+      }
       card.querySelector('md-checkbox')!.checked = true
       card.classList.add('selected')
     })
-    void additionalApps
   }
 
   deselectAll(): void {
@@ -123,8 +153,58 @@ export class AppList {
     this.#container.querySelectorAll<HTMLElement>('.card').forEach(card => {
       const checkbox = card.querySelector('md-checkbox')!
       checkbox.checked = false
-      card.classList.remove('selected')
+      card.classList.remove('selected', 'checkbox-checked-generated', 'checkbox-checked-hack')
     })
+  }
+
+  async fetchDenyList(): Promise<void> {
+    const denylist = await this.#cli.getMagiskDenyList()
+    if (denylist.length < 1) return
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    for (const pkg of denylist) {
+      if (!denyPackages.includes(pkg)) this.#config.push('denyPackages', pkg)
+    }
+    this.#syncCheckboxes()
+  }
+
+  async deselectUnnecessary(): Promise<void> {
+    try {
+      const link = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/more-exclude.json`
+      let response: Response | null = null
+
+      try {
+        response = await fetch(link)
+      } catch {}
+
+      if (!response || !response.ok) {
+        try {
+          response = await fetch(`https://gh.sevencdn.com/${link}`)
+        } catch {}
+      }
+
+      let excludeList: string[] = []
+      if (response && response.ok) {
+        const data: { data: Array<{ apps: Array<{ 'package-name': string }> }> } = await response.json()
+        excludeList = data.data
+          .flatMap(category => category.apps)
+          .map(app => app['package-name'])
+      } else {
+        console.warn('Failed to fetch online unnecessary apps list, using local xposed list only')
+      }
+
+      const xposedList = await this.#cli.getXposedList()
+      const unnecessaryApps = new Set([...excludeList, ...xposedList])
+
+      const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+      const filtered = denyPackages.filter(t => {
+        const pkg = t.endsWith('!') || t.endsWith('?') ? t.slice(0, -1) : t
+        return !unnecessaryApps.has(pkg)
+      })
+      this.#config.set({ ...this.#config.get(), denyPackages: filtered })
+      this.#syncCheckboxes()
+    } catch (error) {
+      console.error('Failed to deselect unnecessary apps:', error)
+    }
   }
 
   renderAppList(container: HTMLElement): void {
@@ -136,22 +216,28 @@ export class AppList {
       e => !e.isSystem || additionalApps.includes(e.packageName),
     )
 
-    const deny = (this.#config.get('denyPackages') as string[]) || []
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
 
-    // 已勾选（在黑名单中）的排前
     displayed.sort((a, b) => {
-      const aDenied = deny.includes(a.packageName)
-      const bDenied = deny.includes(b.packageName)
-      if (aDenied !== bDenied) return aDenied ? -1 : 1
+      const aTargeted = denyPackages.some(t => stripSuffix(t) === a.packageName)
+      const bTargeted = denyPackages.some(t => stripSuffix(t) === b.packageName)
+      if (aTargeted !== bTargeted) return aTargeted ? -1 : 1
       return (a.appName || '').localeCompare(b.appName || '')
     })
 
     const fragment = document.createDocumentFragment()
     for (const entry of displayed) {
-      const denied = deny.includes(entry.packageName)
-      fragment.appendChild(this.#createCard(entry, denied))
+      const raw = denyPackages.find(t => stripSuffix(t) === entry.packageName)
+      const targeted = raw !== undefined
+      const mode = targeted && raw!.endsWith('!') ? 'generate' : targeted && raw!.endsWith('?') ? 'hack' : 'auto'
+      fragment.appendChild(this.#createCard(entry, targeted, mode))
     }
     container.appendChild(fragment)
+
+    if (!document.getElementById('mode-dialog')) {
+      document.body.insertAdjacentHTML('beforeend', this.#modeDialogHtml())
+      this.#setupModeDialogListeners()
+    }
 
     this.#iconObserver?.disconnect()
     this.#iconObserver = this.#setupIconObserver(container)
@@ -173,7 +259,7 @@ export class AppList {
 
     const fragment = document.createDocumentFragment()
     for (const entry of systemEntries) {
-      const cardBox = this.#createCard(entry, false)
+      const cardBox = this.#createCard(entry, false, 'auto')
       const checkbox = cardBox.querySelector('md-checkbox')!
       if (additionalApps.includes(entry.packageName)) {
         checkbox.checked = true
@@ -201,9 +287,14 @@ export class AppList {
     localStorage.setItem(SYSTEM_APPS_KEY, JSON.stringify(apps))
   }
 
-  #createCard(entry: AppEntry, denied: boolean): HTMLElement {
-    const selectedClass = denied ? ' selected' : ''
-    const checkedAttr = denied ? 'checked' : ''
+  #createCard(entry: AppEntry, targeted: boolean, mode: string): HTMLElement {
+    const selectedClass = targeted ? ' selected' : ''
+    let modeClass = ''
+    if (targeted) {
+      if (mode === 'generate') modeClass = ' checkbox-checked-generated'
+      else if (mode === 'hack') modeClass = ' checkbox-checked-hack'
+    }
+    const checkedAttr = targeted ? 'checked' : ''
 
     const wrapper = document.createElement('div')
     wrapper.innerHTML = /* html */ `
@@ -223,7 +314,7 @@ export class AppList {
               <div class="package-name">${entry.packageName}</div>
             </div>
           </label>
-          <md-checkbox class="checkbox" id="checkbox-${entry.packageName}" touch-target="wrapper" ${checkedAttr}></md-checkbox>
+          <md-checkbox class="checkbox${modeClass}" id="checkbox-${entry.packageName}" touch-target="wrapper" ${checkedAttr}></md-checkbox>
         </div>
       </div>`
     return wrapper.firstElementChild as HTMLElement
@@ -236,20 +327,28 @@ export class AppList {
         if (this.menuOpen) return
         const pkg = card.dataset.package!
         const checkbox = card.querySelector('md-checkbox')!
-        const deny = (this.#config.get('denyPackages') as string[]) || []
+        const denyPackages = (this.#config.get('denyPackages') as string[]) || []
 
         if (checkbox.checked) {
-          // 取消勾选：从黑名单移除
-          this.#config.removeMatch('denyPackages', t => t === pkg)
+          const idx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
+          if (idx >= 0) this.#config.removeMatch('denyPackages', t => stripSuffix(t) === pkg)
           checkbox.checked = false
           card.classList.remove('selected')
+          checkbox.classList.remove('checkbox-checked-generated', 'checkbox-checked-hack')
         } else {
-          // 勾选：加入黑名单
           this.#config.push('denyPackages', pkg)
           checkbox.checked = true
           card.classList.add('selected')
         }
       }
+
+      card.addEventListener('contextmenu', (e) => {
+        const checkbox = card.querySelector('md-checkbox')!
+        if (checkbox.checked) {
+          e.preventDefault()
+          this.#openModeDialog(card)
+        }
+      })
     })
   }
 
@@ -264,9 +363,23 @@ export class AppList {
     })
   }
 
-  // 系统应用对话框保存：仅更新可见集合（additionalApps），不直接改 deny.list
   async saveSystemAppSelection(checkedApps: string[]): Promise<void> {
     this.saveAdditionalApps(checkedApps)
+
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const systemEntries = this.#entries.filter(e => e.isSystem)
+
+    for (const entry of systemEntries) {
+      const pkg = entry.packageName
+      const targetIdx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
+      const isChecked = checkedApps.includes(pkg)
+
+      if (isChecked && targetIdx === -1) {
+        this.#config.push('denyPackages', pkg)
+      } else if (!isChecked && targetIdx !== -1) {
+        this.#config.removeMatch('denyPackages', t => stripSuffix(t) === pkg)
+      }
+    }
     await this.refresh(false)
   }
 
@@ -309,14 +422,160 @@ export class AppList {
     img.src = `ksu://icon/${packageName}`
   }
 
-  // 调试用：模拟应用列表与黑名单
+  #modeDialogHtml(): string {
+    return /* html */ `
+    <md-dialog id="mode-dialog">
+      <div slot="headline">
+        <div>${i18n.t('mode_dialog_title')}</div>
+        <div id="mode-dialog-appname"></div>
+      </div>
+      <div slot="content" class="mode-dialog-content">
+        <div class="mode-options">
+          <label class="mode-option">
+            <md-radio id="mode-default" name="mode" value="auto"></md-radio>
+            <span>${i18n.t('mode_auto')}</span>
+          </label>
+          <label class="mode-option">
+            <md-radio id="mode-generate" name="mode" value="generate" class="mode-generated"></md-radio>
+            <span>${i18n.t('mode_certificate_generating')}</span>
+            <span class="mode-icon mode-generated">!</span>
+          </label>
+          <label class="mode-option">
+            <md-radio id="mode-hack" name="mode" value="hack" class="mode-hack"></md-radio>
+            <span>${i18n.t('mode_leaf_hack')}</span>
+            <span class="mode-icon mode-hack">?</span>
+          </label>
+        </div>
+        <div id="mode-policy-section" class="mode-policy-section hidden">
+          <md-divider></md-divider>
+          <md-filled-tonal-button id="mode-policy-toggle">${i18n.t('mode_set_custom_policy')}</md-filled-tonal-button>
+          <div id="mode-policy-fields" class="mode-policy-fields hidden">
+            ${PolicyEditor.html(this.#config.policySchema)}
+          </div>
+        </div>
+      </div>
+      <div slot="actions">
+        <md-outlined-button id="mode-cancel">${i18n.t('functional_button_cancel')}</md-outlined-button>
+        <md-filled-button id="mode-save">${i18n.t('functional_button_save')}</md-filled-button>
+      </div>
+    </md-dialog>`
+  }
+
+  #setupModeDialogListeners(): void {
+    const dialog = document.getElementById('mode-dialog')! as MdDialog
+    applyDialogAnimation(dialog)
+
+    if (this.#config.supportsPerAppConfig) {
+      this.#policyEditor = new PolicyEditor(document.getElementById('mode-policy-fields')!, this.#config.policySchema)
+      this.#policyEditor.bind()
+
+      document.getElementById('mode-policy-toggle')!.onclick = () => {
+        const fields = document.getElementById('mode-policy-fields')!
+        const toggle = document.getElementById('mode-policy-toggle')!
+        const isHidden = fields.classList.contains('hidden')
+        fields.classList.toggle('hidden', !isHidden)
+        toggle.textContent = isHidden ? i18n.t('mode_use_default_policy') : i18n.t('mode_set_custom_policy')
+      }
+    } else {
+      document.getElementById('mode-policy-section')?.classList.add('hidden')
+    }
+
+    document.getElementById('mode-cancel')!.onclick = () => {
+      this.#currentModeCard = null
+      dialog.close?.()
+    }
+
+    document.getElementById('mode-save')!.onclick = () => {
+      if (!this.#currentModeCard) return
+      const pkg = this.#currentModeCard.dataset.package!
+      const checkbox = this.#currentModeCard.querySelector('md-checkbox')!
+
+      const radios = dialog.querySelectorAll<MdRadio>('md-radio')
+      const selectedRadio = Array.from(radios).find(r => r.checked)
+      const modeValue = selectedRadio?.value ?? 'auto'
+      const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+      const idx = denyPackages.findIndex(t => stripSuffix(t) === pkg)
+
+      checkbox.classList.remove('checkbox-checked-generated', 'checkbox-checked-hack')
+
+      if (idx >= 0) {
+        const newValue = modeValue === 'generate' ? `${pkg}!` : modeValue === 'hack' ? `${pkg}?` : pkg
+        this.#config.replaceMatch('denyPackages', t => stripSuffix(t) === pkg, newValue)
+
+        if (modeValue === 'generate') checkbox.classList.add('checkbox-checked-generated')
+        else if (modeValue === 'hack') checkbox.classList.add('checkbox-checked-hack')
+      }
+
+      if (this.#config.supportsPerAppConfig) {
+        const policy = this.#policyEditor.getPolicy()
+        this.#config.set(pkg, policy ?? undefined)
+      }
+
+      this.#currentModeCard = null
+      dialog.close?.()
+    }
+  }
+
+  #openModeDialog(card: HTMLElement): void {
+    const dialog = document.getElementById('mode-dialog') as MdDialog & { show?: () => void }
+    if (!dialog) return
+
+    if (!this.#config.supportsAppMode) return
+
+    const pkg = card.dataset.package!
+    this.#currentModeCard = card
+
+    const appNameDisplay = document.getElementById('mode-dialog-appname')!
+    const appName = card.querySelector('.app-name')?.textContent ?? pkg
+    appNameDisplay.innerHTML = `${appName}<br>${pkg}`
+
+    const denyPackages = (this.#config.get('denyPackages') as string[]) || []
+    const raw = denyPackages.find(t => stripSuffix(t) === pkg)
+    const mode = raw?.endsWith('!') ? 'generate' : raw?.endsWith('?') ? 'hack' : 'auto'
+
+    const radios = dialog.querySelectorAll<MdRadio & { checked?: boolean }>('md-radio')
+    radios.forEach(r => {
+      r.checked = r.value === mode
+    })
+
+    if (this.#config.supportsPerAppConfig) {
+      const configData = this.#config.get()
+      const section = configData[pkg]
+      const hasPolicy = typeof section === 'object' && !Array.isArray(section)
+
+      document.getElementById('mode-policy-section')!.classList.remove('hidden')
+      const fields = document.getElementById('mode-policy-fields')!
+      const toggle = document.getElementById('mode-policy-toggle')!
+      if (hasPolicy) {
+        fields.classList.remove('hidden')
+        toggle.textContent = i18n.t('mode_use_default_policy')
+      } else {
+        fields.classList.add('hidden')
+        toggle.textContent = i18n.t('mode_set_custom_policy')
+      }
+      this.#policyEditor.setPolicy(hasPolicy ? section : null)
+    }
+
+    dialog.show()
+  }
+
+  // Debug
   #initDevMode(): void {
-    const data = this.#config.get()
-    if (!data.denyPackages || data.denyPackages.length === 0) {
-      data.denyPackages = [
+    const configData = this.#config.get()
+    if (!configData.denyPackages || configData.denyPackages.length === 0) {
+      configData.denyPackages = [
         'io.github.vvb2060.keyattestation',
+        'io.github.vvb2060.mahoshojo?',
+        'com.google.android.gms!',
         'com.example.banking',
+        'com.example.wallet!',
       ]
+    }
+    configData['com.google.android.gms'] = {
+      vb_key: 'auto', vb_hash: '241890bd44131d34c077cb01a0c3ea1ff68533b21e9d83b3f3adca6663c3d443', security_patch: '2026-05-05',
+    }
+    configData['com.example.banking'] = {
+      vb_key: 'auto', vb_hash: 'auto', security_patch: 'auto',
     }
 
     this.#entries = [
@@ -330,6 +589,9 @@ export class AppList {
       { packageName: 'com.example.streaming', appName: 'Video Streaming', isSystem: false },
       { packageName: 'com.google.android.gms', appName: 'Google Play Services', isSystem: true },
       { packageName: 'com.android.vending', appName: 'Google Play Store', isSystem: true },
+      { packageName: 'com.oplus.deepthinker', appName: 'Deep Thinker', isSystem: true },
+      { packageName: 'com.heytap.speechassist', appName: 'HeyTap Speech Assist', isSystem: true },
+      { packageName: 'com.coloros.sceneservice', appName: 'ColorOS Scene Service', isSystem: true },
       { packageName: 'com.google.android.gsf', appName: 'Google Services Framework', isSystem: true },
       { packageName: 'com.qualcomm.qti', appName: 'Qualcomm Technologies', isSystem: true },
     ]

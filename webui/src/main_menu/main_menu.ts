@@ -1,4 +1,3 @@
-// 顶部主菜单
 import type { MdIconButton, MdMenuItem, MdMenu, MdSubMenu } from '@material/web/all'
 import { i18n } from '../i18n'
 import './main_menu.scss'
@@ -20,37 +19,69 @@ export class MainMenu {
           <md-filled-tonal-icon-button id="refresh"><md-icon>refresh</md-icon></md-filled-tonal-icon-button>
         </div>
         <md-divider role="separator" tabindex="-1"></md-divider>
+        <md-menu-item id="select-denylist">
+          <div slot="headline">${i18n.t('menu_select_denylist')}</div>
+        </md-menu-item>
+        <md-menu-item id="deselect-unnecessary">
+          <div slot="headline">${i18n.t('menu_deselect_unnecessary')}</div>
+        </md-menu-item>
         <md-menu-item id="add-system-app">
           <div slot="headline">${i18n.t('menu_add_system_app')}</div>
         </md-menu-item>
+        <md-divider role="separator" tabindex="-1"></md-divider>
         <md-sub-menu hover-close-delay="0" id="keybox-menu">
           <md-menu-item slot="item" class="sub-menu-entry">
             <div slot="headline">${i18n.t('menu_keybox')}</div>
             <md-icon slot="end">key</md-icon>
           </md-menu-item>
           <md-menu positioning="popover" slot="menu" x-offset="2">
-            <md-menu-item id="keybox-local">
-              <div slot="headline">${i18n.t('menu_keybox_import')}</div>
+            <md-menu-item id="keybox-aosp">
+              <div slot="headline">${i18n.t('menu_keybox_aosp')}</div>
             </md-menu-item>
-            <md-menu-item id="keybox-paste">
-              <div slot="headline">${i18n.t('menu_keybox_paste')}</div>
+            <md-menu-item id="keybox-unknown">
+              <div slot="headline">${i18n.t('menu_keybox_unknown')}</div>
+            </md-menu-item>
+            <md-menu-item id="keybox-local">
+              <div slot="headline">${i18n.t('menu_keybox_local')}</div>
+            </md-menu-item>
+            <md-menu-item id="keybox-repo">
+              <div slot="headline">${i18n.t('menu_keybox_repo')}</div>
+              <md-icon slot="end">open_in_new</md-icon>
+            </md-menu-item>
+            <md-divider role="separator" tabindex="-1"></md-divider>
+            <md-menu-item id="keybox-custom" class="icon-item">
+              <div class="icon-button-item">
+                <md-filled-tonal-icon-button><md-icon>add</md-icon></md-filled-tonal-icon-button>
+              </div>
             </md-menu-item>
           </md-menu>
         </md-sub-menu>
         <md-menu-item id="prop-setting">
           <div slot="headline">${i18n.t('menu_prop_setting')}</div>
         </md-menu-item>
-        <md-menu-item id="config">
-          <div slot="headline">${i18n.t('menu_config')}</div>
+        <md-menu-item id="default-policy">
+          <div slot="headline">${i18n.t('menu_set_default_policy')}</div>
+        </md-menu-item>
+        <md-divider role="separator" tabindex="-1"></md-divider>
+        <md-menu-item id="fktee-config">
+          <div slot="headline">${i18n.t('menu_fktee_config')}</div>
+          <md-icon slot="end">settings</md-icon>
         </md-menu-item>
         <md-menu-item id="hal">
           <div slot="headline">${i18n.t('menu_hal')}</div>
+          <md-icon slot="end">memory</md-icon>
         </md-menu-item>
         <md-menu-item id="usb">
           <div slot="headline">${i18n.t('menu_usb')}</div>
+          <md-icon slot="end">usb</md-icon>
+        </md-menu-item>
+        <md-menu-item id="props-conf">
+          <div slot="headline">${i18n.t('menu_props_conf')}</div>
+          <md-icon slot="end">tune</md-icon>
         </md-menu-item>
         <md-menu-item id="status">
           <div slot="headline">${i18n.t('menu_status')}</div>
+          <md-icon slot="end">monitor_heart</md-icon>
         </md-menu-item>
         <md-menu-item id="restart">
           <div slot="headline">${i18n.t('menu_restart')}</div>
@@ -87,13 +118,20 @@ export class MainMenu {
       ['select-all', 'menu-select-all'],
       ['deselect-all', 'menu-deselect-all'],
       ['refresh', 'menu-refresh'],
+      ['select-denylist', 'menu-select-denylist'],
+      ['deselect-unnecessary', 'menu-deselect-unnecessary'],
       ['add-system-app', 'menu-add-system-app'],
+      ['keybox-aosp', 'menu-keybox-aosp'],
+      ['keybox-unknown', 'menu-keybox-unknown'],
       ['keybox-local', 'menu-keybox-local'],
-      ['keybox-paste', 'menu-keybox-paste'],
+      ['keybox-repo', 'menu-keybox-repo'],
+      ['keybox-custom', 'menu-keybox-custom'],
       ['prop-setting', 'menu-prop-setting'],
-      ['config', 'menu-config'],
+      ['default-policy', 'menu-default-policy'],
+      ['fktee-config', 'menu-fktee-config'],
       ['hal', 'menu-hal'],
       ['usb', 'menu-usb'],
+      ['props-conf', 'menu-props-conf'],
       ['status', 'menu-status'],
       ['restart', 'menu-restart'],
       ['help', 'menu-help'],
@@ -101,30 +139,30 @@ export class MainMenu {
     ]
 
     items.forEach(([id, event]) => {
-      const itemEl = fragment.querySelector<MdMenuItem>(`#${id}`)
-      if (itemEl) {
-        itemEl.onclick = () => {
+      const el = fragment.querySelector<MdMenuItem>(`#${id}`)
+      if (el) {
+        el.onclick = () => {
           this.#emit(event)
           menuOptions.open = false
         }
       }
     })
 
-    // 子菜单点击切换（覆盖默认 hover 行为，移动端更顺手）
+    // Override default behaviour
     let menuOpen = false
     fragment.querySelectorAll('.sub-menu-entry').forEach(entry => {
       const item = entry as MdMenuItem
-      const subMenu = item.parentElement as MdSubMenu
+      const menu = item.parentElement as MdSubMenu
       item.onclick = (e) => {
         e.stopPropagation()
         menuOpen = !menuOpen
-        menuOpen ? subMenu.show() : subMenu.close()
+        menuOpen ? menu.show() : menu.close()
       }
-      subMenu.querySelector('md-menu')?.addEventListener('opening', () => menuOpen = true)
-      subMenu.querySelector('md-menu')?.addEventListener('closing', () => menuOpen = false)
+      menu.querySelector('md-menu')?.addEventListener('opening', () => menuOpen = true)
+      menu.querySelector('md-menu')?.addEventListener('closing', () => menuOpen = false)
     })
 
-    // 生成语言菜单（仅 en + zh-CN）
+    // Generate language menu
     const languageMenu = fragment.querySelector('#language-menu')
     if (languageMenu) {
       languageMenu.innerHTML = ''
@@ -142,9 +180,28 @@ export class MainMenu {
         }
         languageMenu.appendChild(item)
       }
+
+      // Translation guide
+      const divider = document.createElement('md-divider')
+      divider.setAttribute('role', 'separator')
+      divider.setAttribute('tabindex', '-1')
+      languageMenu.appendChild(divider)
+
+      const guideItem = document.createElement('md-menu-item')
+      guideItem.innerHTML = `<div slot="headline">${i18n.t('more_language')}</div>`
+      guideItem.onclick = () => {
+        this.#emit('menu-i18n-guide')
+        menuOptions.open = false
+      }
+      languageMenu.appendChild(guideItem)
     }
 
     return fragment
+  }
+
+  hideItem(id: string): void {
+    const el = document.getElementById(id)
+    if (el) el.style.display = 'none'
   }
 
   on(event: string, callback: () => void): void {

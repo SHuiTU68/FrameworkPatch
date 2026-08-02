@@ -1,8 +1,7 @@
-// FKTee-rs WebUI 启动入口
-// 先检查 WebView 版本是否满足要求，满足则动态加载 main.ts
 import { exec } from 'kernelsu-alt'
 import { isSupported, renderBlockingPage, UPDATE_URL } from './webview/webview'
 
+// Check is webview version met requirement
 if (!isSupported()) {
   document.querySelector<HTMLDivElement>('#app')!.innerHTML = renderBlockingPage()
   document.getElementById('update-webview')!.onclick = async () => {

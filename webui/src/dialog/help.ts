@@ -20,7 +20,15 @@ export class HelpDialog {
         <div slot="content" class="help-content">
           <div class="instruction">
             <h3 data-i18n="functional_button_save"></h3>
-            <p data-i18n="help_save_description"></p>
+            <p data-i18n="help_save_and_update_description"></p>
+          </div>
+          <div class="instruction">
+            <h3 data-i18n="help_select_denylist"></h3>
+            <p data-i18n="help_select_denylist_description"></p>
+          </div>
+          <div class="instruction">
+            <h3 data-i18n="help_deselect_unnecessary"></h3>
+            <p data-i18n="help_deselect_unnecessary_description"></p>
           </div>
           <div class="instruction">
             <h3 data-i18n="help_add_system_app"></h3>
@@ -30,25 +38,23 @@ export class HelpDialog {
             <h3 data-i18n="help_set_keybox"></h3>
             <p data-i18n="help_set_keybox_description"></p>
             <ul>
+              <li data-i18n="help_set_keybox_aosp"></li>
+              <li data-i18n="help_set_keybox_unknown"></li>
               <li data-i18n="help_set_keybox_local"></li>
-              <li data-i18n="help_set_keybox_paste"></li>
+              <li data-i18n="help_set_keybox_custom"></li>
             </ul>
+          </div>
+          <div class="instruction">
+            <h3 data-i18n="help_set_default_policy"></h3>
+            <p data-i18n="help_set_default_policy_description"></p>
           </div>
           <div class="instruction">
             <h3 data-i18n="help_prop_settings"></h3>
             <p data-i18n="help_prop_settings_description"></p>
-          </div>
-          <div class="instruction">
-            <h3 data-i18n="help_config"></h3>
-            <p data-i18n="help_config_description"></p>
-          </div>
-          <div class="instruction">
-            <h3 data-i18n="help_hal"></h3>
-            <p data-i18n="help_hal_description"></p>
-          </div>
-          <div class="instruction">
-            <h3 data-i18n="help_usb"></h3>
-            <p data-i18n="help_usb_description"></p>
+            <ul>
+              <li data-i18n="help_prop_settings_handler"></li>
+              <li data-i18n="help_prop_settings_boot_hash"></li>
+            </ul>
           </div>
         </div>
         <div slot="actions">

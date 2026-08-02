@@ -3,7 +3,7 @@
     <string name="system_default">System Default</string>
     <string name="more_language">More</string>
     <!-- Header -->
-    <string name="header_title">FKTee-rs</string>
+    <string name="header_title">Tricky Addon</string>
     <!-- Help Menu-->
     <string name="help_help_instructions">Instructions</string>
     <string name="help_save_and_update_description">Save current configure.</string>
@@ -54,7 +54,6 @@
     <string name="menu_keybox_aosp">AOSP</string>
     <string name="menu_keybox_unknown">Unknown</string>
     <string name="menu_keybox_local">Local</string>
-    <string name="menu_keybox_repo">Repo</string>
     <string name="menu_prop_setting">Prop Settings</string>
     <string name="menu_set_default_policy">Set Default Policy</string>
     <string name="menu_help">Help</string>
@@ -100,9 +99,6 @@
     <string name="prompt_custom_not_found">No custom keybox found</string>
     <string name="prompt_custom_invalid_script">Script not allowed</string>
     <string name="prompt_custom_removed">Custom keybox entry removed</string>
-    <string name="prompt_keybox_repo_set">Keybox set from repo successfully</string>
-    <string name="prompt_keybox_repo_set_error">Failed to set keybox from repo</string>
-    <string name="prompt_keybox_repo_download_error">Download failed for %s</string>
     <!-- Security Patch -->
     <string name="default_policy_title">Default Policy</string>
     <string name="security_patch_invalid_all">Invalid format</string>
@@ -130,95 +126,4 @@
     <string name="mode_leaf_hack">Leaf Hack</string>
     <string name="mode_set_custom_policy">Set Custom Policy</string>
     <string name="mode_use_default_policy">Use Default Policy</string>
-    <!-- FKTee Menu -->
-    <string name="menu_fktee_config">Config Editor</string>
-    <string name="menu_hal">HAL Mode</string>
-    <string name="menu_usb">USB Debug</string>
-    <string name="menu_props_conf">Props Conf</string>
-    <string name="menu_status">Status</string>
-    <string name="menu_restart">Restart Daemon</string>
-    <!-- HAL Dialog -->
-    <string name="hal_dialog_title">HAL Mode</string>
-    <string name="hal_mode_enable">Enable HAL mode</string>
-    <string name="hal_mode_hint">When enabled, the daemon hooks the real HAL instead of using the injector. Restart the daemon to take effect.</string>
-    <string name="hal_forge_mode">Forge mode</string>
-    <string name="hal_hook_enabled">Hook enabled</string>
-    <string name="hal_real_hal_instance">Real HAL instance</string>
-    <string name="hal_keybox_path">Keybox path</string>
-    <string name="hal_deny_list_path">Deny list path</string>
-    <string name="hal_device">Device</string>
-    <string name="hal_android_version">Android version</string>
-    <string name="hal_os_version">OS version</string>
-    <string name="hal_os_patch_level">OS patch level</string>
-    <string name="hal_vendor_patch_level">Vendor patch level</string>
-    <string name="hal_boot_patch_level">Boot patch level</string>
-    <string name="hal_keymaster_version">Keymaster version</string>
-    <string name="hal_attestation_version">Attestation version</string>
-    <string name="hal_security_level">Security level</string>
-    <string name="prompt_hal_saved">HAL config saved</string>
-    <string name="prompt_hal_mode_changed">HAL mode changed, restart daemon to take effect</string>
-    <string name="prompt_hal_save_error">Failed to save HAL config</string>
-    <!-- Config Dialog -->
-    <string name="config_dialog_title">Config Editor</string>
-    <string name="config_section_backend">Backend</string>
-    <string name="config_section_trust">Trust</string>
-    <string name="config_section_crypto">Crypto</string>
-    <string name="config_section_log">Log</string>
-    <string name="config_section_injector">Injector</string>
-    <string name="config_backend_mode">Backend mode</string>
-    <string name="config_verified_boot_state">Verified boot state</string>
-    <string name="config_device_locked">Device locked</string>
-    <string name="config_vb_key">VB key</string>
-    <string name="config_vb_hash">VB hash</string>
-    <string name="config_security_patch">Security patch</string>
-    <string name="config_root_kek_seed">Root KEK seed</string>
-    <string name="config_kak_seed">KAK seed</string>
-    <string name="config_shared_secret_seed">Shared secret seed</string>
-    <string name="config_shared_secret_nonce">Shared secret nonce</string>
-    <string name="config_log_level">Log level</string>
-    <string name="config_log_to_kmsg">Log to kmsg</string>
-    <string name="config_log_verbose">Verbose log</string>
-    <string name="config_hook_enabled">Hook enabled</string>
-    <string name="get_key_entry">get_key_entry</string>
-    <string name="generate_key">generate_key</string>
-    <string name="import_key">import_key</string>
-    <string name="create_operation">create_operation</string>
-    <string name="delete_key">delete_key</string>
-    <string name="list_entries">list_entries</string>
-    <string name="grant">grant</string>
-    <string name="prompt_config_saved">Config saved</string>
-    <string name="prompt_config_save_error">Failed to save config</string>
-    <!-- Props Conf Dialog -->
-    <string name="props_conf_title">Props Conf</string>
-    <string name="props_conf_hint">Edit props.conf content. Each line is a prop=value pair applied by the prop handler. Set enabled=1 to enable.</string>
-    <string name="prompt_props_conf_saved">Props conf saved</string>
-    <string name="prompt_props_conf_save_error">Failed to save props conf</string>
-    <!-- USB Dialog -->
-    <string name="usb_dialog_title">USB Debug</string>
-    <string name="usb_adb_enabled">USB ADB enabled</string>
-    <string name="prompt_usb_set">USB setting updated</string>
-    <string name="prompt_usb_set_error">Failed to update USB setting</string>
-    <!-- Status Dialog -->
-    <string name="status_title">Status</string>
-    <string name="status_mode">Mode</string>
-    <string name="status_mode_hal">HAL</string>
-    <string name="status_mode_inject">Injector</string>
-    <string name="status_daemon">Daemon</string>
-    <string name="status_injector">Injector</string>
-    <string name="status_hal_proc">HAL process</string>
-    <string name="status_running">Running</string>
-    <string name="status_stopped">Stopped</string>
-    <string name="status_keybox">Keybox</string>
-    <string name="status_present">Present</string>
-    <string name="status_absent">Absent</string>
-    <string name="status_config_files">Config file</string>
-    <!-- Restart Dialog -->
-    <string name="restart_dialog_title">Restart Daemon</string>
-    <string name="restart_dialog_hint">Send a restart signal to the daemons. They will be restarted by service.sh on the next loop.</string>
-    <string name="restart_all">Restart All</string>
-    <string name="restart_fktee">FKTee</string>
-    <string name="restart_injector">Injector</string>
-    <string name="restart_hal">HAL</string>
-    <string name="prompt_restart_sent">Restart signal sent to %s</string>
-    <string name="prompt_restart_error">Failed to send restart signal</string>
 </resources>

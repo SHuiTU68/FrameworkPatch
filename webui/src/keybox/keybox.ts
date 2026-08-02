@@ -1,24 +1,32 @@
-// Keybox 管理：本地文件导入 + 粘贴文本，写入前备份到 .bak
-import type { MdDialog, MdTextButton, MdFilledButton, MdOutlinedTextField } from '@material/web/all'
+import type { MdDialog } from '@material/web/all'
 import { i18n } from '../i18n'
+import { Cli } from '../cli'
 import { File } from '../file'
 import { FileSelector } from '../file_selector/file_selector'
-import type { Snackbar } from '../snackbar/snackbar'
-import { KEYBOX_FILE } from '../constant'
+import { Snackbar } from '../snackbar/snackbar'
+import { generateUnknownKeybox, isKeygenAvailable } from './unknown'
+import { CustomKeyboxProvider } from './custom'
+import { Config } from '../config'
 import { applyDialogAnimation } from '../dialog/animation'
 import './keybox.scss'
 
 export class Keybox {
-  readonly #fileSelector: FileSelector
+  readonly cli: Cli
+  readonly custom: CustomKeyboxProvider
+  readonly #config: Config
+  #fileSelector: FileSelector
   #snackbar: Snackbar
 
-  constructor(_cli: unknown, _config: unknown, fileSelector: FileSelector, snackbar: Snackbar) {
+  constructor(cli: Cli, config: Config, fileSelector: FileSelector, snackbar: Snackbar) {
+    this.cli = cli
+    this.#config = config
     this.#fileSelector = fileSelector
     this.#snackbar = snackbar
+    this.custom = new CustomKeyboxProvider(this, fileSelector, snackbar)
   }
 
   get keyboxPath(): string {
-    return KEYBOX_FILE
+    return this.#config.configPath + '/keybox.xml'
   }
 
   appendTo(container: HTMLElement): void {
@@ -29,62 +37,96 @@ export class Keybox {
   #getElement(): DocumentFragment {
     const template = document.createElement('template')
     template.innerHTML = /* html */ `
-      <md-dialog id="keybox-paste-dialog" class="text-field-dialog">
-        <div slot="headline">${i18n.t('keybox_paste_title')}</div>
+      <md-dialog id="customkb-dialog" class="text-field-dialog">
+        <div slot="headline">${i18n.t('customkb_dialog_title')}</div>
         <div slot="content">
-          <md-outlined-text-field id="keybox-paste-input" type="textarea" rows="8" label="${i18n.t('keybox_paste_title')}" placeholder="${i18n.t('keybox_paste_placeholder')}"></md-outlined-text-field>
+          <md-outlined-text-field id="customkb-name-input" label="${i18n.t('customkb_name_placeholder')}" placeholder="" class="customkb-input">
+            <md-icon slot="trailing-icon" class="hidden">error</md-icon>
+          </md-outlined-text-field>
+          <md-outlined-text-field id="customkb-link-input" label="URL" type="url" placeholder="https://raw.githubusercontent.com/" class="customkb-input">
+            <md-icon slot="trailing-icon" class="hidden">error</md-icon>
+          </md-outlined-text-field>
+          <md-outlined-text-field id="customkb-script-input" label="${i18n.t('customkb_script_placeholder')}" placeholder="base64 -d" class="customkb-input" error-text="${i18n.t('prompt_custom_invalid_script')}">
+            <md-icon slot="trailing-icon" class="hidden">error</md-icon>
+          </md-outlined-text-field>
+          <md-divider class="new"></md-divider>
+          <div class="customkb-actions new">
+            <md-filled-tonal-icon-button id="customkb-import"><md-icon>download</md-icon></md-filled-tonal-icon-button>
+            <md-filled-tonal-icon-button id="customkb-export"><md-icon>upload</md-icon></md-filled-tonal-icon-button>
+          </div>
         </div>
         <div slot="actions">
-          <md-text-button id="cancel-keybox-paste">${i18n.t('functional_button_cancel')}</md-text-button>
-          <md-filled-button id="save-keybox-paste">${i18n.t('functional_button_import')}</md-filled-button>
+          <md-text-button id="reset-customkb" class="new">${i18n.t('functional_button_reset')}</md-text-button>
+          <md-text-button id="remove-customkb" class="old">${i18n.t('functional_button_remove')}</md-text-button>
+          <div class="spacer"></div>
+          <md-text-button id="cancel-customkb">${i18n.t('functional_button_cancel')}</md-text-button>
+          <md-text-button id="save-customkb">${i18n.t('functional_button_save')}</md-text-button>
+        </div>
+      </md-dialog>
+
+      <md-dialog id="customkb-remove-dialog" type="alert">
+        <div slot="headline">${i18n.t('customkb_remove_title')}</div>
+        <md-icon slot="icon">delete</md-icon>
+        <div slot="content">
+          <div id="customkb-remove-single">${i18n.t('customkb_remove_message')}</div>
+          <div id="customkb-reset" style="display: none">${i18n.t('customkb_reset_message')}</div>
+        </div>
+        <div slot="actions">
+          <md-outlined-button id="cancel-remove-customkb">${i18n.t('functional_button_cancel')}</md-outlined-button>
+          <md-filled-button id="confirm-remove-customkb">${i18n.t('functional_button_confirm')}</md-filled-button>
         </div>
       </md-dialog>
     `
 
     const fragment = template.content
-    const dialog = fragment.querySelector<MdDialog>('#keybox-paste-dialog')!
-
-    fragment.querySelector<MdTextButton>('#cancel-keybox-paste')!.onclick = () => dialog.close()
-    fragment.querySelector<MdFilledButton>('#save-keybox-paste')!.onclick = async () => {
-      const input = dialog.querySelector<MdOutlinedTextField>('#keybox-paste-input')!
-      const content = input.value.trim()
-      dialog.close()
-      if (!content) {
-        this.#snackbar.show(i18n.t('prompt_keybox_invalid'), false)
-        return
-      }
-      await this.#apply(content)
-    }
-
+    this.custom.bind(fragment)
     return fragment
   }
 
-  // 从本地文件选择导入
+  async setKeybox(content: string, cmd: string = 'cat'): Promise<boolean> {
+    await File.copy(this.keyboxPath, `${this.keyboxPath}.bak`).catch(() => {})
+
+    try {
+      await File.write(this.keyboxPath, content, cmd)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async setAospKey(): Promise<void> {
+    try {
+      const content = await this.cli.getAospKey()
+      const result = await this.setKeybox(content)
+      this.#snackbar.show(i18n.t(result ? 'prompt_aosp_key_set' : 'prompt_key_set_error'), result)
+    } catch {
+      this.#snackbar.show(i18n.t('prompt_key_set_error'), false)
+    }
+  }
+
+  async setUnknownKey(): Promise<void> {
+    try {
+      const keyboxContent = await generateUnknownKeybox()
+      const result = await this.setKeybox(keyboxContent)
+      this.#snackbar.show(i18n.t(result ? 'prompt_unknown_key_set' : 'prompt_key_set_error'), result)
+    } catch (error) {
+      console.error(error)
+      this.#snackbar.show(i18n.t('prompt_key_set_error'), false)
+    }
+  }
+
   async setLocalKey(): Promise<void> {
     try {
       const content = await this.#fileSelector.getFileContent('xml')
       if (!content) return
-      await this.#apply(content)
+      const result = await this.setKeybox(content)
+      this.#snackbar.show(i18n.t(result ? 'prompt_custom_key_set' : 'prompt_key_set_error'), result)
     } catch {
       this.#snackbar.show(i18n.t('prompt_key_set_error'), false)
     }
   }
 
-  // 打开粘贴对话框
-  showPasteDialog(): void {
-    const input = document.querySelector<MdOutlinedTextField>('#keybox-paste-input')
-    if (input) input.value = ''
-    document.querySelector<MdDialog>('#keybox-paste-dialog')?.show()
-  }
-
-  // 写入 keybox.xml，先备份 .bak
-  async #apply(content: string): Promise<void> {
-    try {
-      await File.copy(this.keyboxPath, `${this.keyboxPath}.bak`).catch(() => {})
-      await File.write(this.keyboxPath, content)
-      this.#snackbar.show(i18n.t('prompt_key_set'))
-    } catch {
-      this.#snackbar.show(i18n.t('prompt_key_set_error'), false)
-    }
+  static isKeygenAvailable(): boolean {
+    return isKeygenAvailable()
   }
 }
