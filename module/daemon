@@ -1,85 +1,82 @@
 #!/system/bin/sh
-# daemon - fktee keystore backend watchdog
-# Keeps the fktee binary alive with exponential backoff (500ms -> 30s).
-# Honors restart signal file: /data/adb/Tee-rs/restart.fktee  (or restart.all)
+# daemon - fktee backend watchdog（参考 OMK daemon 架构）
+#
+# while true 循环：启动 fktee → kill -0 监控存活 → 收到 restart 信号或
+# 子进程退出时重启。restart 信号由 WebUI 触发（touch restart.fktee）。
+#
+# 与 OMK 不同：fktee 是常驻进程（提供 binder service），不会主动退出。
+# 退出即视为异常，自动重启 + 指数退避。
 
 MODDIR=${0%/*}
 TEERS_DIR=/data/adb/Tee-rs
-PIDFILE="$TEERS_DIR/data/fktee.pid"
+STATE_DIR=$TEERS_DIR/data
+RESTART_FILE=$TEERS_DIR/restart.fktee
+RESTART_ALL_FILE=$TEERS_DIR/restart.all
 ARCH=$(getprop ro.product.cpu.abi)
-BIN="$MODDIR/libs/$ARCH/fktee"
 
-# Backoff parameters (milliseconds)
-BACKOFF_MS=500
-MAX_BACKOFF_MS=30000
-RUN_CHECK_MS=500
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/vendor/lib64/:/system/lib64/:/apex/com.android.runtime/lib64/bionic/"
 
-# Detect fractional sleep capability once (busybox/toybox support it)
-if sleep 0.1 2>/dev/null; then
-    HAS_FRACTIONAL_SLEEP=1
-else
-    HAS_FRACTIONAL_SLEEP=0
-fi
-
-# msleep <milliseconds>
-msleep() {
-    ms=$1
-    if [ "$HAS_FRACTIONAL_SLEEP" = "1" ]; then
-        secs=$(awk -v m="$ms" 'BEGIN{ printf "%.2f", m/1000 }')
-        sleep "$secs" 2>/dev/null
-    else
-        s=$(( (ms + 999) / 1000 ))
-        [ "$s" -lt 1 ] && s=1
-        sleep "$s" 2>/dev/null
-    fi
+find_module_fktee() {
+  if [ -f "$STATE_DIR/fktee" ]; then
+    echo "$STATE_DIR/fktee"
+    return 0
+  fi
+  if [ -f "$MODDIR/libs/$ARCH/fktee" ]; then
+    echo "$MODDIR/libs/$ARCH/fktee"
+    return 0
+  fi
+  return 1
 }
 
-is_running() {
-    [ -f "$PIDFILE" ] || return 1
-    pid=$(cat "$PIDFILE" 2>/dev/null)
-    [ -n "$pid" ] && [ -d "/proc/$pid" ]
+expand_shared_restart() {
+  if [ -f "$RESTART_ALL_FILE" ]; then
+    : > "$RESTART_FILE"
+    : > "$TEERS_DIR/restart.injector"
+    : > "$TEERS_DIR/restart.hal"
+    rm -f "$RESTART_ALL_FILE"
+  fi
 }
 
-start_once() {
-    [ -x "$BIN" ] || return 1
-    rm -f "$PIDFILE"
-    # 日志重定向到 logs/fktee.log，便于排查崩溃/panic
-    nohup "$BIN" >"$TEERS_DIR/logs/fktee.log" 2>&1 &
-    echo $! > "$PIDFILE"
+consume_restart_request() {
+  expand_shared_restart
+  if [ -f "$RESTART_FILE" ]; then
+    rm -f "$RESTART_FILE"
+    return 0
+  fi
+  return 1
 }
 
-bump_backoff() {
-    BACKOFF_MS=$((BACKOFF_MS * 2))
-    [ "$BACKOFF_MS" -gt "$MAX_BACKOFF_MS" ] && BACKOFF_MS=$MAX_BACKOFF_MS
-}
+cd "$MODDIR" || exit 1
+mkdir -p "$STATE_DIR" "$TEERS_DIR/logs"
 
 while true; do
-    # Consume restart signals
-    if [ -f "$TEERS_DIR/restart.fktee" ] || [ -f "$TEERS_DIR/restart.all" ]; then
-        [ -f "$TEERS_DIR/restart.fktee" ] && rm -f "$TEERS_DIR/restart.fktee"
-        if is_running; then
-            kill "$(cat "$PIDFILE")" 2>/dev/null
-            rm -f "$PIDFILE"
-        fi
-        BACKOFF_MS=500
-        # fallthrough: respawn immediately below
-    fi
+  TARGET=$(find_module_fktee)
+  if [ -z "$TARGET" ]; then
+    echo "[fktee-daemon] fktee binary not found" >>"$TEERS_DIR/logs/fktee.log"
+    sleep 5
+    continue
+  fi
 
-    if ! is_running; then
-        if start_once; then
-            msleep "$RUN_CHECK_MS"
-            if is_running; then
-                BACKOFF_MS=500
-            else
-                msleep "$BACKOFF_MS"
-                bump_backoff
-            fi
-        else
-            # Binary missing/exec failure
-            msleep "$BACKOFF_MS"
-            bump_backoff
-        fi
-    else
-        sleep 5
+  chmod 0755 "$TARGET" 2>/dev/null || true
+
+  "$TARGET" >>"$TEERS_DIR/logs/fktee.log" 2>&1 &
+  child_pid=$!
+
+  while kill -0 "$child_pid" 2>/dev/null; do
+    if consume_restart_request; then
+      echo "[fktee-daemon] restart requested" >>"$TEERS_DIR/logs/fktee.log"
+      kill -TERM "$child_pid" 2>/dev/null
+      sleep 2
+      if kill -0 "$child_pid" 2>/dev/null; then
+        kill -KILL "$child_pid" 2>/dev/null
+      fi
+      break
     fi
+    sleep 2
+  done
+
+  wait "$child_pid"
+  rc=$?
+  echo "[fktee-daemon] fktee exited with code $rc" >>"$TEERS_DIR/logs/fktee.log"
+  sleep 2
 done

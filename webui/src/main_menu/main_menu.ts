@@ -56,8 +56,9 @@ export class MainMenu {
             </md-menu-item>
           </md-menu>
         </md-sub-menu>
-        <md-menu-item id="prop-setting">
-          <div slot="headline">${i18n.t('menu_prop_setting')}</div>
+        <md-menu-item id="props-conf">
+          <div slot="headline">${i18n.t('menu_props_conf')}</div>
+          <md-icon slot="end">tune</md-icon>
         </md-menu-item>
         <md-menu-item id="default-policy">
           <div slot="headline">${i18n.t('menu_set_default_policy')}</div>
@@ -74,10 +75,6 @@ export class MainMenu {
         <md-menu-item id="usb">
           <div slot="headline">${i18n.t('menu_usb')}</div>
           <md-icon slot="end">usb</md-icon>
-        </md-menu-item>
-        <md-menu-item id="props-conf">
-          <div slot="headline">${i18n.t('menu_props_conf')}</div>
-          <md-icon slot="end">tune</md-icon>
         </md-menu-item>
         <md-menu-item id="status">
           <div slot="headline">${i18n.t('menu_status')}</div>
@@ -126,12 +123,11 @@ export class MainMenu {
       ['keybox-local', 'menu-keybox-local'],
       ['keybox-repo', 'menu-keybox-repo'],
       ['keybox-custom', 'menu-keybox-custom'],
-      ['prop-setting', 'menu-prop-setting'],
+      ['props-conf', 'menu-props-conf'],
       ['default-policy', 'menu-default-policy'],
       ['fktee-config', 'menu-fktee-config'],
       ['hal', 'menu-hal'],
       ['usb', 'menu-usb'],
-      ['props-conf', 'menu-props-conf'],
       ['status', 'menu-status'],
       ['restart', 'menu-restart'],
       ['help', 'menu-help'],

@@ -1,202 +1,249 @@
 #!/system/bin/sh
 # service.sh - FKTee-rs late_start service
-# Two operating modes (mutually exclusive):
+# 参考 OMK 的 start_daemon 模式：pid_matches_script 验证存活，
+# restart 文件机制触发重启。
+#
+# 两种模式（互斥）：
 #   1. HAL 模式（/data/adb/Tee-rs/hal.enabled 存在）：
-#      post-fs-data.sh 已把真 HAL vintf 实例改为 fktee-real。
-#      此处启动 fktee-hal 抢注 default，keystore2 路由到我们。
-#      inject 路径不启动（避免双 hook 冲突）。
-#   2. inject 模式（默认）：
-#      启动 fktee backend + injector（ptrace 注入 keystore2）。
-# 两种模式都应用 props.conf / usb.conf 配置，并响应文件触发重启信号。
+#      vintf 重写真 HAL → fktee-real，fktee-hal 抢注 default。
+#      inject 路径不启动。
+#   2. inject 模式（默认）：启动 fktee backend + injector。
+#
+# 两种模式都应用 props.conf / usb.conf，响应 restart 信号。
 
 MODDIR=${0%/*}
 TEERS_DIR=/data/adb/Tee-rs
-DAEMON="$MODDIR/daemon"
-DAEMON_INJECTOR="$MODDIR/daemon-injector"
-HAL_BIN="$MODDIR/libs/$(getprop ro.product.cpu.abi)/fktee-hal"
+ARCH=$(getprop ro.product.cpu.abi)
+HAL_BIN="$MODDIR/libs/$ARCH/fktee-hal"
 PID_FKTEE="$TEERS_DIR/data/fktee.pid"
 PID_INJECTOR="$TEERS_DIR/data/injector.pid"
 PID_HAL="$TEERS_DIR/data/hal.pid"
 HAL_ENABLED=0
 [ -f "$TEERS_DIR/hal.enabled" ] && HAL_ENABLED=1
 
-# ---------- Wait for boot completed ----------
-while [ "$(getprop sys.boot_completed)" != "1" ]; do
-    sleep 1
-done
-# Give keystore2 a moment to settle
-sleep 3
+mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
+
+# ---------- pid_matches_script (参考 OMK) ----------
+# 检查 pid 对应的 cmdline 是否包含 script 名，避免 pid 复用误判。
+pid_matches_script() {
+  pid=$1
+  script=$2
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+  echo "$cmdline" | grep -F "$script" >/dev/null 2>&1
+}
+
+# ---------- start_daemon (参考 OMK) ----------
+# 启动一个 daemon 脚本并记录 pid。若 pidfile 指向的进程仍存活且 cmdline
+# 匹配则不重启。启动后 sleep 1 验证存活。
+start_daemon() {
+  script=$1
+  pidfile=$2
+
+  if [ -f "$pidfile" ]; then
+    pid=$(cat "$pidfile" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && pid_matches_script "$pid" "$script"; then
+      return 0
+    fi
+    rm -f "$pidfile"
+  fi
+
+  sh "$script" &
+  pid=$!
+  echo $pid > "$pidfile"
+  sleep 1
+  if ! kill -0 "$pid" 2>/dev/null || ! pid_matches_script "$pid" "$script"; then
+    rm -f "$pidfile"
+    return 1
+  fi
+  return 0
+}
+
+# ---------- kill_pidfile ----------
+kill_pidfile() {
+  pid=$(cat "$1" 2>/dev/null)
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null
+  rm -f "$1"
+}
 
 # ---------- Prop hiding (resetprop, config-driven) ----------
-# 读取 /data/adb/Tee-rs/props.conf（每行 key=value，# 与空行忽略）。
-# 特殊键 enabled=1 开启；其余行先 resetprop --delete 再 resetprop set，
-# 保证读取者看不到原始值。无 resetprop 或无配置文件则跳过。
-#
-# 支持两种行前缀语法：
-#   key~match=value    仅当 getprop(key) 包含 match 才覆盖（contains_reset_prop）
-#   once:key=value     仅在开机时执行一次，主循环轮询时跳过
-#                      （用于 sys.boot_completed=0 等“一次性”条目，
-#                       避免每 5s 把它持续压回 0 导致系统误判未开机）
-#
-# 用法: apply_props [all|once|loop]
-#   all  开机时用，处理全部条目（含 once:）— 缺省
-#   once 仅处理 once: 前缀条目
-#   loop 仅处理非 once: 前缀条目（主循环轮询用）
+# 读取 props.conf，支持 key=value / key~match=value / once:key=value
+# once: 条目仅开机执行一次（避免持续压回值导致系统异常）
 apply_props() {
-    local conf="$TEERS_DIR/props.conf"
-    [ -f "$conf" ] || return 0
-    command -v resetprop >/dev/null 2>&1 || return 0
-    local mode="${1:-all}"
+  local conf="$TEERS_DIR/props.conf"
+  [ -f "$conf" ] || return 0
+  command -v resetprop >/dev/null 2>&1 || return 0
+  local mode="${1:-all}"
 
-    local enabled=1
-    while IFS= read -r line; do
-        case "$line" in ''|\#*) continue;; esac
-        [ "${line%%=*}" = "enabled" ] && { enabled=${line#*=}; break; }
-    done < "$conf"
-    [ "$enabled" = "1" ] || return 0
+  local enabled=1
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue;; esac
+    [ "${line%%=*}" = "enabled" ] && { enabled=${line#*=}; break; }
+  done < "$conf"
+  [ "$enabled" = "1" ] || return 0
 
-    local spec key val match cur is_once
-    while IFS= read -r line; do
-        case "$line" in ''|\#*|enabled=*) continue;; esac
-        spec=${line%%=*}; val=${line#*=}
-        is_once=0
-        case "$spec" in
-            once:*) is_once=1; spec=${spec#once:};;
+  local spec key val match cur is_once
+  while IFS= read -r line; do
+    case "$line" in ''|\#*|enabled=*) continue;; esac
+    spec=${line%%=*}; val=${line#*=}
+    is_once=0
+    case "$spec" in
+      once:*) is_once=1; spec=${spec#once:};;
+    esac
+    case "$mode:$is_once" in
+      once:0) continue;;
+      loop:1) continue;;
+    esac
+    case "$spec" in
+      *~*)
+        key=${spec%%~*}; match=${spec#*~}
+        cur=$(getprop "$key" 2>/dev/null)
+        case "$cur" in
+          *"$match"*)
+            resetprop --delete "$key" 2>/dev/null
+            resetprop "$key" "$val" 2>/dev/null
+            ;;
         esac
-        # 按模式过滤：once 模式只跑 once 条目；loop 模式只跑非 once 条目
-        case "$mode:$is_once" in
-            once:0) continue;;
-            loop:1) continue;;
-        esac
-        # ~ 条件语法：仅当 getprop(key) 含 match 才覆盖
-        case "$spec" in
-            *~*)
-                key=${spec%%~*}; match=${spec#*~}
-                cur=$(getprop "$key" 2>/dev/null)
-                case "$cur" in
-                    *"$match"*)
-                        resetprop --delete "$key" 2>/dev/null
-                        resetprop "$key" "$val" 2>/dev/null
-                        ;;
-                esac
-                ;;
-            *)
-                resetprop --delete "$spec" 2>/dev/null
-                resetprop "$spec" "$val" 2>/dev/null
-                ;;
-        esac
-    done < "$conf"
+        ;;
+      *)
+        resetprop --delete "$spec" 2>/dev/null
+        resetprop "$spec" "$val" 2>/dev/null
+        ;;
+    esac
+  done < "$conf"
 }
 
-# ---------- USB 调试开关 (config-driven) ----------
-# 读取 /data/adb/Tee-rs/usb.conf 的 adb_enabled=1/0，通过 settings 持久化。
+# ---------- USB 调试开关 ----------
 apply_usb() {
-    local conf="$TEERS_DIR/usb.conf"
-    [ -f "$conf" ] || return 0
-    local adb=1
-    while IFS= read -r line; do
-        case "$line" in ''|\#*) continue;; esac
-        [ "${line%%=*}" = "adb_enabled" ] && { adb=${line#*=}; break; }
-    done < "$conf"
-    # settings 在 late_start 阶段已可用
-    command -v settings >/dev/null 2>&1 && settings put global adb_enabled "$adb" 2>/dev/null
+  local conf="$TEERS_DIR/usb.conf"
+  [ -f "$conf" ] || return 0
+  local adb=1
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue;; esac
+    [ "${line%%=*}" = "adb_enabled" ] && { adb=${line#*=}; break; }
+  done < "$conf"
+  command -v settings >/dev/null 2>&1 && settings put global adb_enabled "$adb" 2>/dev/null
 }
 
-apply_props all   # 开机：处理全部条目（含 once: 一次性项）
-apply_usb
+# ---------- HAL 模式：vintf 重写（late_start 阶段执行）----------
+# 把真 HAL 的 default 实例改名为 fktee-real，让 fktee-hal 抢注 default。
+# 在 service.sh（late_start）执行而非 post-fs-data，因 SELinux 此时已就绪。
+# 用 mount --bind 覆盖 vintf manifest（vendor 分区只读，bind mount 不需要写权限）。
+rewrite_vintf_for_hal() {
+  [ "$HAL_ENABLED" = "1" ] || return 0
+  [ -f "$TEERS_DIR/data/hal.vintf-rewritten" ] && return 0
 
-# ---------- Helpers ----------
-is_pid_alive() {
-    pid=$(cat "$1" 2>/dev/null)
-    [ -n "$pid" ] && [ -d "/proc/$pid" ]
-}
+  local real_instance="fktee-real"
+  local changed=0
+  local f manifests=""
 
-kill_pidfile() {
-    pid=$(cat "$1" 2>/dev/null)
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    rm -f "$1"
+  for d in /vendor/etc/vintf /odm/etc/vintf; do
+    [ -d "$d" ] || continue
+    [ -f "$d/manifest.xml" ] && manifests="$manifests $d/manifest.xml"
+    if [ -d "$d/manifest" ]; then
+      for f in "$d"/manifest/*.xml; do
+        [ -f "$f" ] && manifests="$manifests $f"
+      done
+    fi
+  done
+
+  mkdir -p "$TEERS_DIR/data/vintf-overlay"
+  for f in $manifests; do
+    grep -q "android.hardware.security.keymint" "$f" 2>/dev/null || continue
+    local base=$(echo "$f" | tr '/' '_')
+    local tmp="$TEERS_DIR/data/vintf-overlay/$base"
+    if sed -E "s|IKeyMintDevice/[^<\"[:space:]]+|IKeyMintDevice/${real_instance}|g" "$f" > "$tmp" 2>/dev/null; then
+      if mount --bind "$tmp" "$f" 2>/dev/null; then
+        changed=1
+        echo "[fktee-hal] vintf bind-mounted: $f" >>"$TEERS_DIR/logs/hal.log"
+      else
+        echo "[fktee-hal] bind mount 失败: $f" >>"$TEERS_DIR/logs/hal.log"
+      fi
+    fi
+  done
+
+  [ "$changed" = "1" ] && touch "$TEERS_DIR/data/hal.vintf-rewritten"
 }
 
 # ---------- HAL 模式：启动 fktee-hal ----------
-# 抢注 default 实例。真 HAL 已被 post-fs-data 改名为 fktee-real，
-# fktee-hal 启动后 wait_for_interface 拿真 HAL 代理转发非 attestation 事务。
 start_hal() {
-    if [ ! -x "$HAL_BIN" ]; then
-        echo "[fktee-hal] 二进制不存在: $HAL_BIN" >&2
-        return 1
-    fi
-    # 检查 vintf 是否已重写（post-fs-data 标记）
-    if [ ! -f "$TEERS_DIR/data/hal.vintf-rewritten" ]; then
-        echo "[fktee-hal] 警告: vintf 未重写，真 HAL 可能仍占用 default 实例"
-        echo "[fktee-hal] fktee-hal 抢注 default 会失败。请检查 hal.enabled + vintf manifest"
-    fi
-    # fktee-hal 内部 wait_for_service 阻塞至真 HAL（fktee-real）上线，
-    # 此处无需额外 sleep。nohup 让它脱离 service.sh 主循环独立运行。
-    nohup "$HAL_BIN" >"$TEERS_DIR/logs/hal.log" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$PID_HAL"
-    echo "[fktee-hal] started pid=$pid log=$TEERS_DIR/logs/hal.log"
+  if [ ! -x "$HAL_BIN" ]; then
+    echo "[fktee-hal] 二进制不存在: $HAL_BIN" >>"$TEERS_DIR/logs/hal.log"
+    return 1
+  fi
+  rewrite_vintf_for_hal
+  if [ ! -f "$TEERS_DIR/data/hal.vintf-rewritten" ]; then
+    echo "[fktee-hal] 警告: vintf 未重写，真 HAL 可能仍占 default" >>"$TEERS_DIR/logs/hal.log"
+  fi
+  nohup "$HAL_BIN" >>"$TEERS_DIR/logs/hal.log" 2>&1 &
+  echo $! > "$PID_HAL"
+  echo "[fktee-hal] started pid=$(cat $PID_HAL)" >>"$TEERS_DIR/logs/hal.log"
 }
 
-# ---------- inject 模式：watchdog 启动 ----------
-launch_watchdog() {
-    wd="$1"
-    if [ -x "$wd" ]; then
-        nohup "$wd" >/dev/null 2>&1 &
-    fi
+# ---------- 等待 boot completed（带超时，避免死循环）----------
+# 不用 while+sleep 死等，改为最多等 60s 后继续（即使 boot_completed 异常
+# 也不应卡死 service.sh 导致其他服务无法启动）。
+wait_boot() {
+  local i=0
+  while [ "$(getprop sys.boot_completed)" != "1" ] && [ "$i" -lt 60 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
 }
 
-if [ "$HAL_ENABLED" = "1" ]; then
-    echo "[fktee] HAL 模式启用，启动 fktee-hal（inject 路径跳过）"
-    start_hal
-else
-    echo "[fktee] inject 模式（默认），启动 fktee backend + injector"
-    launch_watchdog "$DAEMON"
-    launch_watchdog "$DAEMON_INJECTOR"
-fi
-
-# Give watchdogs/HAL a chance to spawn
+wait_boot
 sleep 2
 
-# ---------- Main loop: consume restart signals ----------
-# restart.all      -> restart all daemons (含 HAL 模式下的 fktee-hal)
-# restart.fktee    -> restart fktee backend only (inject 模式)
-# restart.injector -> restart injector only (inject 模式)
-# restart.hal      -> restart fktee-hal only (HAL 模式)
+# ---------- 开机应用 props + usb ----------
+apply_props all
+apply_usb
+
+# ---------- 启动模式选择 ----------
+if [ "$HAL_ENABLED" = "1" ]; then
+  echo "[fktee] HAL 模式启用，启动 fktee-hal" >>"$TEERS_DIR/logs/hal.log"
+  start_hal
+else
+  echo "[fktee] inject 模式（默认），启动 daemon + daemon-injector"
+  start_daemon "$MODDIR/daemon" "$PID_FKTEE"
+  start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
+fi
+
+# ---------- 主循环：restart 信号 + 定期重应用 props ----------
 while true; do
-    if [ -f "$TEERS_DIR/restart.all" ]; then
-        rm -f "$TEERS_DIR/restart.all"
-        kill_pidfile "$PID_FKTEE"
-        kill_pidfile "$PID_INJECTOR"
-        kill_pidfile "$PID_HAL"
-        [ "$HAL_ENABLED" = "1" ] && start_hal || {
-            launch_watchdog "$DAEMON"
-            launch_watchdog "$DAEMON_INJECTOR"
-        }
+  if [ -f "$TEERS_DIR/restart.all" ]; then
+    rm -f "$TEERS_DIR/restart.all"
+    kill_pidfile "$PID_FKTEE"
+    kill_pidfile "$PID_INJECTOR"
+    kill_pidfile "$PID_HAL"
+    if [ "$HAL_ENABLED" = "1" ]; then
+      start_hal
+    else
+      start_daemon "$MODDIR/daemon" "$PID_FKTEE"
+      start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
     fi
+  fi
 
-    if [ -f "$TEERS_DIR/restart.fktee" ]; then
-        rm -f "$TEERS_DIR/restart.fktee"
-        kill_pidfile "$PID_FKTEE"
-        [ "$HAL_ENABLED" != "1" ] && launch_watchdog "$DAEMON"
-    fi
+  if [ -f "$TEERS_DIR/restart.fktee" ]; then
+    rm -f "$TEERS_DIR/restart.fktee"
+    kill_pidfile "$PID_FKTEE"
+    [ "$HAL_ENABLED" != "1" ] && start_daemon "$MODDIR/daemon" "$PID_FKTEE"
+  fi
 
-    if [ -f "$TEERS_DIR/restart.injector" ]; then
-        rm -f "$TEERS_DIR/restart.injector"
-        kill_pidfile "$PID_INJECTOR"
-        [ "$HAL_ENABLED" != "1" ] && launch_watchdog "$DAEMON_INJECTOR"
-    fi
+  if [ -f "$TEERS_DIR/restart.injector" ]; then
+    rm -f "$TEERS_DIR/restart.injector"
+    kill_pidfile "$PID_INJECTOR"
+    [ "$HAL_ENABLED" != "1" ] && start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
+  fi
 
-    if [ -f "$TEERS_DIR/restart.hal" ]; then
-        rm -f "$TEERS_DIR/restart.hal"
-        kill_pidfile "$PID_HAL"
-        [ "$HAL_ENABLED" = "1" ] && start_hal
-    fi
+  if [ -f "$TEERS_DIR/restart.hal" ]; then
+    rm -f "$TEERS_DIR/restart.hal"
+    kill_pidfile "$PID_HAL"
+    [ "$HAL_ENABLED" = "1" ] && start_hal
+  fi
 
-    # Re-apply prop hiding & USB state periodically (some processes reset props)
-    # loop 模式跳过 once: 条目，避免 sys.boot_completed 被持续压回 0
-    apply_props loop
-    apply_usb
+  # 定期重应用 props（loop 模式跳过 once: 条目）
+  apply_props loop
+  apply_usb
 
-    sleep 5
+  sleep 5
 done

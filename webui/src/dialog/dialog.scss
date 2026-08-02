@@ -164,18 +164,6 @@
     }
   }
 
-  #prop-dialog {
-    [slot="content"] {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    #boot-hash-input {
-      width: 100%;
-    }
-  }
-
   #system-app-dialog {
     [slot="headline"] {
       display: flex;

@@ -1,50 +1,40 @@
-# ===== ptrace 注入路径（inject 模式，默认）所需规则 =====
-# keystore2 加载注入的 payload（system_file）执行
-allow keystore system_file file { execute getattr map read receive }
-# 崩溃时允许 attach 调试
-allow crash_dump keystore process *
-# keystore2 查找 default_android_service（注入后内部 RPC 用）
-allow keystore default_android_service service_manager find
-# ----- ptrace attach keystore2（inject 模式核心，缺失则 PTRACE_ATTACH 被 SELinux 拒绝）-----
-# service.sh(daemon-injector) 运行在 magisk 域，需 attach keystore2 注入 payload。
-allow magisk keystore process { ptrace signal sigchld getsched setsched }
-allow keystore magisk process { sigchld }
+# FKTee-rs SELinux 规则
+# 参考 OMK 的极简策略 + HAL 模式 / prop 隐藏额外规则。
 
-# ===== KeyMint HAL 替换路径（HAL 模式，方案 A）所需规则 =====
-# fktee-hal 由 Magisk service.sh 启动，进程域为 magisk（KernelSU/APatch 类似）。
-# 真机调试时用 `ps -Z | grep fktee-hal` 确认实际域，若非 magisk 需补充对应规则。
-#
-# 1. HAL 进程向 servicemanager 注册 / 查找 service
+# ===== inject 路径（keystore2 exec inject 二进制 + payload）=====
+# keystore2 需执行 inject 二进制并 mmap payload .so
+allow keystore system_file unix_dgram_socket { getattr read recvfrom }
+allow system_file keystore unix_dgram_socket sendto
+allow keystore system_file file { execute getattr map read receive }
+# crash_dump 读取 keystore2 内存（注入调试用）
+allow crash_dump keystore process *
+
+# ===== HAL 模式（fktee-hal 作为 KeyMint HAL 服务）=====
+# 1. HAL 进程（magisk 域）向 servicemanager 注册 / 查找 service
 allow magisk default_android_service service_manager { add find }
-# 2. keystore2 查找并调用我们注册的 keymint HAL（default_android_service）
 allow keystore default_android_service service_manager { find }
-# 3. keystore2 ↔ HAL 进程经 binder 双向通信
+# 2. keystore2 ↔ HAL 进程经 binder 双向通信
 allow keystore magisk binder { call transfer }
 allow magisk keystore binder { call transfer }
-# 4. HAL 进程查找真 HAL（fktee-real 实例）转发非 attestation 事务
-allow magisk default_android_service service_manager find
+# 3. HAL 进程查找真 HAL（fktee-real 实例）
 allow magisk hal_keymint_server binder { call transfer }
 allow hal_keymint_server magisk binder { call transfer }
-allow magisk hal_keymint_default binder { call transfer }
-allow hal_keymint_default magisk binder { call transfer }
-# 5. HAL 进程读取配置 / keybox / 黑名单（/data/adb/Tee-rs/）
-#    /data/adb/* 在 Magisk 下标记为 magisk_file
+# 4. HAL 进程读取配置 / keybox / 黑名单 / packages.list
 allow magisk magisk_file file { read open getattr }
 allow magisk magisk_file dir { read search }
-# 6. HAL 进程读取 /data/system/packages.list（caller UID → 包名映射）
-#    packages.list 标记为 system_data_file
 allow magisk system_data_file file { read open getattr }
 allow magisk system_data_file dir { search }
-# 7. HAL 进程写入日志（/data/adb/Tee-rs/logs/）
+# 5. HAL 进程写入日志
 allow magisk magisk_file file { write create append }
 allow magisk magisk_file dir { write add_name }
-
-# 8. post-fs-data / service.sh 执行 mount --bind 覆盖 vendor vintf manifest
-#    magisk 域需 mount 权限 + 读写 vendor_files
+# 6. vintf bind mount（service.sh late_start 阶段）
 allow magisk self capability { sys_admin }
-allow magisk vendor_configs_file file { read write getattr setattr mount }
+allow magisk vendor_configs_file file { read getattr mount }
 allow magisk vendor_configs_file dir { read search mounton }
-allow magisk odm_configs_file file { read write getattr setattr mount }
+allow magisk odm_configs_file file { read getattr mount }
 allow magisk odm_configs_file dir { read search mounton }
 allow magisk tmpfs filesystem { mount }
-allow magisk magisk_file filesystem { mount }
+
+# ===== prop 隐藏（resetprop 由 magisk 域执行）=====
+allow magisk default_prop property_service { set }
+allow magisk default_prop property_type { set }

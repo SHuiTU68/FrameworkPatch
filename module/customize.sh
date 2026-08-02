@@ -1,105 +1,155 @@
 #!/system/bin/sh
-# customize.sh - FKTee-rs installation script (Magisk/KSU/APatch)
+# customize.sh - FKTee-rs installation script
+# 参考 OMK 安装逻辑：用 verify.sh 的 extract 函数逐个解压+校验，
+# 避免 SKIPUNZIP + 全局 unzip 在部分设备上的兼容性问题。
 
-# 不设 SKIPUNZIP：让管理器自动解压 zip 到 $MODPATH。
-# 之前用 SKIPUNZIP=1 + 手动 unzip，部分设备的 toybox unzip 行为异常或
-# $ZIPFILE 变量未设置，导致解压失败、文件为空。让管理器自动解压最可靠。
+SKIPUNZIP=1
 
-PROP_SKIP_DELETE=1
+SONAME="FKTee-rs"
+SUPPORTED_ABIS="arm64 x64"
+MIN_SDK=29
 
-# ---------- Helper ----------
-ui_print() { echo "ui_print $1" >&1; echo "ui_print" >&1; }
+# ---------- Root implementation detection ----------
+if [ "$BOOTMODE" ] && [ "$KSU" ]; then
+  ui_print "- Installing from KernelSU app"
+  ui_print "- KernelSU version: $KSU_KERNEL_VER_CODE (kernel) + $KSU_VER_CODE (ksud)"
+  if [ "$(which magisk)" ]; then
+    ui_print "*********************************************************"
+    ui_print "! Multiple root implementation is NOT supported!"
+    ui_print "! Please uninstall Magisk before installing $SONAME"
+    abort    "*********************************************************"
+  fi
+elif [ "$BOOTMODE" ] && [ "$MAGISK_VER_CODE" ]; then
+  ui_print "- Installing from Magisk app"
+else
+  ui_print "*********************************************************"
+  ui_print "! Install from recovery is not supported"
+  ui_print "! Please install from KernelSU or Magisk app"
+  abort    "*********************************************************"
+fi
+
+VERSION=$(grep_prop version "${TMPDIR}/module.prop")
+ui_print "- Installing $SONAME $VERSION"
 
 # ---------- Architecture check ----------
-ARCH=$(getprop ro.product.cpu.abi)
-case "$ARCH" in
-    arm64-v8a|x86_64)
-        ui_print "- Supported architecture: $ARCH"
-        ;;
-    *)
-        ui_print "! Unsupported architecture: $ARCH"
-        abort "! FKTee-rs only supports arm64-v8a and x86_64"
-        ;;
-esac
+support=false
+for abi in $SUPPORTED_ABIS; do
+  if [ "$ARCH" == "$abi" ]; then
+    support=true
+  fi
+done
+if [ "$support" == "false" ]; then
+  abort "! Unsupported platform: $ARCH"
+else
+  ui_print "- Device platform: $ARCH"
+fi
 
 # ---------- Android version check ----------
-SDK=$(getprop ro.build.version.sdk)
-if [ -z "$SDK" ]; then
-    SDK=$(getprop ro.build.version.sdk_int)
+if [ "$API" -lt $MIN_SDK ]; then
+  ui_print "! Unsupported sdk: $API"
+  abort "! Minimal supported sdk is $MIN_SDK"
+else
+  ui_print "- Device sdk: $API"
 fi
-if [ -z "$SDK" ] || [ "$SDK" -lt 29 ]; then
-    ui_print "! Unsupported Android SDK: ${SDK:-unknown}"
-    abort "! FKTee-rs requires Android 10+ (SDK 29)"
+
+# ---------- Extract verify.sh ----------
+ui_print "- Extracting verify.sh"
+unzip -o "$ZIPFILE" 'verify.sh' -d "$TMPDIR" >&2
+if [ ! -f "$TMPDIR/verify.sh" ]; then
+  ui_print "*********************************************************"
+  ui_print "! Unable to extract verify.sh!"
+  ui_print "! This zip may be corrupted, please try downloading again"
+  abort    "*********************************************************"
 fi
-ui_print "- Android SDK: $SDK"
+. "$TMPDIR/verify.sh"
+extract "$ZIPFILE" 'customize.sh'  "$TMPDIR/.vunzip"
+extract "$ZIPFILE" 'verify.sh'     "$TMPDIR/.vunzip"
 
-# ---------- Verify extraction ----------
-# 管理器已自动解压，验证关键文件存在
-ui_print "- Verifying extracted files..."
-if [ ! -f "$MODPATH/service.sh" ] || [ ! -f "$MODPATH/module.prop" ]; then
-    abort "! Extraction failed: service.sh or module.prop missing in $MODPATH"
+# ---------- Extract module files (逐个 extract + 校验) ----------
+ui_print "- Extracting module files"
+extract "$ZIPFILE" 'module.prop'       "$MODPATH"
+extract "$ZIPFILE" 'post-fs-data.sh'   "$MODPATH"
+extract "$ZIPFILE" 'service.sh'        "$MODPATH"
+extract "$ZIPFILE" 'sepolicy.rule'     "$MODPATH"
+extract "$ZIPFILE" 'daemon'            "$MODPATH"
+extract "$ZIPFILE" 'daemon-injector'   "$MODPATH"
+extract "$ZIPFILE" 'uninstall.sh'      "$MODPATH"
+extract "$ZIPFILE" 'action.sh'         "$MODPATH"
+extract "$ZIPFILE" 'config.toml'       "$MODPATH"
+extract "$ZIPFILE" 'injector.toml'     "$MODPATH"
+extract "$ZIPFILE" 'hal.toml'          "$MODPATH"
+extract "$ZIPFILE" 'deny.list'         "$MODPATH"
+extract "$ZIPFILE" 'props.conf'        "$MODPATH"
+extract "$ZIPFILE" 'usb.conf'          "$MODPATH"
+extract "$ZIPFILE" 'keybox.xml'        "$MODPATH"
+
+chmod 755 "$MODPATH/daemon" "$MODPATH/daemon-injector" \
+  "$MODPATH/post-fs-data.sh" "$MODPATH/service.sh" \
+  "$MODPATH/uninstall.sh" "$MODPATH/action.sh"
+
+# ---------- Extract binaries by architecture ----------
+if [ "$ARCH" = "x64" ] || [ "$ARCH" = "x86_64" ]; then
+  ui_print "- Using packaged x64 binaries"
+  BINDIR="$MODPATH/libs/x86_64"
+  extract "$ZIPFILE" 'libs/x86_64/fktee'              "$MODPATH"
+  extract "$ZIPFILE" 'libs/x86_64/inject'             "$MODPATH"
+  extract "$ZIPFILE" 'libs/x86_64/injector.payload'   "$MODPATH"
+  extract "$ZIPFILE" 'libs/x86_64/fktee-hal'          "$MODPATH"
+elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-v8a" ]; then
+  ui_print "- Using packaged arm64 binaries"
+  BINDIR="$MODPATH/libs/arm64-v8a"
+  extract "$ZIPFILE" 'libs/arm64-v8a/fktee'           "$MODPATH"
+  extract "$ZIPFILE" 'libs/arm64-v8a/inject'          "$MODPATH"
+  extract "$ZIPFILE" 'libs/arm64-v8a/injector.payload' "$MODPATH"
+  extract "$ZIPFILE" 'libs/arm64-v8a/fktee-hal'       "$MODPATH"
+else
+  abort "! Unsupported platform: $ARCH"
 fi
-if [ ! -d "$MODPATH/libs/$ARCH" ]; then
-    abort "! No binaries found for $ARCH in libs/$ARCH"
+
+[ -f "$BINDIR/fktee" ]             || abort "! Missing $BINDIR/fktee"
+[ -f "$BINDIR/inject" ]            || abort "! Missing $BINDIR/inject"
+[ -f "$BINDIR/injector.payload" ]  || abort "! Missing $BINDIR/injector.payload"
+[ -f "$BINDIR/fktee-hal" ]         || abort "! Missing $BINDIR/fktee-hal"
+chmod 755 "$BINDIR/fktee" "$BINDIR/inject" "$BINDIR/injector.payload" "$BINDIR/fktee-hal"
+
+# ---------- WebUI ----------
+if [ -d "$MODPATH/webroot" ]; then
+  ui_print "- WebUI bundled"
 fi
-ui_print "- Files extracted successfully"
 
-# ---------- Select binaries by architecture ----------
-ui_print "- Installing binaries for $ARCH..."
-for bin in "$MODPATH/libs/$ARCH"/*; do
-    [ -f "$bin" ] && chmod 0755 "$bin"
-done
+# ---------- Config dir setup ----------
+CONFIG_DIR=/data/adb/Tee-rs
+mkdir -p "$CONFIG_DIR/data" "$CONFIG_DIR/logs"
+chmod 0700 "$CONFIG_DIR" "$CONFIG_DIR/data" "$CONFIG_DIR/logs"
 
-# ---------- Create config directory ----------
-TEERS_DIR=/data/adb/Tee-rs
-ui_print "- Creating config directory: $TEERS_DIR"
-# 配置直接放在 $TEERS_DIR 根目录（与 daemon/injector 读取的硬编码路径一致），
-# data/ 与 logs/ 仍为子目录。避免 config/ 子目录导致的路径不一致。
-mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
-chmod 0700 "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
+# Clean stale runtime artifacts from previous install
+rm -f "$CONFIG_DIR/data/fktee.pid" "$CONFIG_DIR/data/injector.pid" "$CONFIG_DIR/data/hal.pid"
+rm -f "$CONFIG_DIR/restart.fktee" "$CONFIG_DIR/restart.injector" "$CONFIG_DIR/restart.hal" "$CONFIG_DIR/restart.all"
+rm -f "$CONFIG_DIR/data/hal.vintf-rewritten"
 
-# ---------- Copy default configs on first install ----------
-# copy_default <module_src> <fktee_dst>
+# Copy default configs (never overwrite existing user configs)
 copy_default() {
-    src="$MODPATH/$1"
-    dst="$TEERS_DIR/$2"
-    if [ ! -f "$src" ]; then
-        ui_print "! Missing template: $1"
-        return 1
-    fi
-    if [ -f "$dst" ]; then
-        ui_print "- Kept existing: $2"
-    else
-        cp -f "$src" "$dst"
-        chmod 0600 "$dst"
-        ui_print "- Installed default: $2"
-    fi
-    return 0
+  src="$MODPATH/$1"
+  dst="$CONFIG_DIR/$2"
+  [ -f "$src" ] || return 0
+  if [ ! -f "$dst" ]; then
+    cp -f "$src" "$dst"
+    chmod 0600 "$dst"
+  fi
+  return 0
 }
 
 copy_default config.toml    config.toml
 copy_default injector.toml  injector.toml
 copy_default hal.toml       hal.toml
-copy_default keybox.xml     keybox.xml
 copy_default deny.list      deny.list
 copy_default props.conf     props.conf
 copy_default usb.conf       usb.conf
-
-# ---------- Set permissions ----------
-ui_print "- Setting permissions..."
-set_perm_recursive "$MODPATH" 0 0 0755 0755
-set_perm_recursive "$MODPATH/libs" 0 0 0755 0755
-set_perm "$MODPATH/service.sh"        0 0 0700
-set_perm "$MODPATH/post-fs-data.sh"   0 0 0700
-set_perm "$MODPATH/uninstall.sh"      0 0 0700
-set_perm "$MODPATH/action.sh"         0 0 0700
-set_perm "$MODPATH/daemon"            0 0 0700
-set_perm "$MODPATH/daemon-injector"   0 0 0700
-
-# Mark binaries executable
-for bin in "$MODPATH/libs/$ARCH"/*; do
-    [ -f "$bin" ] && set_perm "$bin" 0 0 0755
-done
+# keybox.xml: 只在用户没有时用模块自带的占位 keybox（用户应替换为真实 keybox）
+if [ ! -f "$CONFIG_DIR/keybox.xml" ]; then
+  cp -f "$MODPATH/keybox.xml" "$CONFIG_DIR/keybox.xml"
+  chmod 0600 "$CONFIG_DIR/keybox.xml"
+fi
 
 ui_print "- Installation complete"
-ui_print "- Reboot to activate FKTee-rs"
+ui_print "- Reboot to activate $SONAME"

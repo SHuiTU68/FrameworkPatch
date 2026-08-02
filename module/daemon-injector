@@ -1,99 +1,155 @@
 #!/system/bin/sh
-# daemon-injector - inject watchdog
-# Keeps the inject binary running AND ensures keystore2 stays injected.
-# If keystore2 is found but our lib is no longer in its maps, re-inject.
-# 15s cooldown debounce to avoid hammering a restarting keystore2.
-# Honors restart signal: /data/adb/Tee-rs/restart.injector  (or restart.all)
+# daemon-injector - inject watchdog（参考 OMK daemon-injector 架构）
+#
+# while true 循环：查找 keystore2 → 检查是否已注入 → 未注入则调用 inject。
+# restart 信号触发 keystore2 重启 + 重新注入。15s 冷却避免 hammer。
 
 MODDIR=${0%/*}
 TEERS_DIR=/data/adb/Tee-rs
-PIDFILE="$TEERS_DIR/data/injector.pid"
+STATE_DIR=$TEERS_DIR/data
+PAYLOAD_STATE_FILE=$STATE_DIR/injector.payload
+RESTART_FILE=$TEERS_DIR/restart.injector
+RESTART_ALL_FILE=$TEERS_DIR/restart.all
 ARCH=$(getprop ro.product.cpu.abi)
-BIN="$MODDIR/libs/$ARCH/inject"
-# payload 与配置的绝对路径——显式传给 inject，避免 injector 自动模式读取
-# 不存在的 /data/adb/Tee-rs/injector.payload（payload 实际在 $MODPATH/libs/$ARCH/）。
-PAYLOAD="$MODDIR/libs/$ARCH/injector.payload"
-CONFIG="$TEERS_DIR/injector.toml"
 
-COOLDOWN=15        # seconds: wait after an inject attempt before retrying
-CHECK_INTERVAL=5   # seconds: how often to verify injection state
-# Marker name this injector leaves in keystore2 maps（payload 文件名片段）
-INJECT_MARKER="injector.payload"
+find_module_injector() {
+  if [ -f "$STATE_DIR/inject" ]; then
+    echo "$STATE_DIR/inject"
+    return 0
+  fi
+  if [ -f "$MODDIR/libs/$ARCH/inject" ]; then
+    echo "$MODDIR/libs/$ARCH/inject"
+    return 0
+  fi
+  return 1
+}
 
-# ---------- Helpers ----------
-# Locate the keystore2 process id
-get_keystore_pid() {
-    for p in /proc/[0-9]*; do
-        pid=${p##*/}
-        # cmdline is null-separated; tr to space for grep
-        if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "keystore2"; then
-            echo "$pid"
-            return 0
-        fi
-    done
+find_module_payload() {
+  if [ -f "$MODDIR/libs/$ARCH/injector.payload" ]; then
+    echo "$MODDIR/libs/$ARCH/injector.payload"
+    return 0
+  fi
+  return 1
+}
+
+prepare_injector() {
+  TARGET_INJECTOR=$(find_module_injector)
+  if [ -z "$TARGET_INJECTOR" ]; then
+    echo "[injector-daemon] injector binary not found" >>"$TEERS_DIR/logs/injector.log"
     return 1
+  fi
+  TARGET_PAYLOAD=$(find_module_payload)
+  if [ -z "$TARGET_PAYLOAD" ]; then
+    echo "[injector-daemon] injector.payload not found" >>"$TEERS_DIR/logs/injector.log"
+    return 1
+  fi
+  chmod 0755 "$TARGET_INJECTOR" 2>/dev/null || true
+  chcon u:object_r:system_file:s0 "$TARGET_INJECTOR" 2>/dev/null || true
+  if [ ! -x "$TARGET_INJECTOR" ]; then
+    echo "[injector-daemon] injector not executable: $TARGET_INJECTOR" >>"$TEERS_DIR/logs/injector.log"
+    return 1
+  fi
+  return 0
 }
 
-# Is keystore2 currently running?
-keystore_alive() {
-    [ -n "$(get_keystore_pid)" ]
+expand_shared_restart() {
+  if [ -f "$RESTART_ALL_FILE" ]; then
+    : > "$RESTART_FILE"
+    : > "$TEERS_DIR/restart.fktee"
+    : > "$TEERS_DIR/restart.hal"
+    rm -f "$RESTART_ALL_FILE"
+  fi
 }
 
-# Is keystore2 still carrying our injected lib?
+consume_restart_request() {
+  expand_shared_restart
+  if [ -f "$RESTART_FILE" ]; then
+    rm -f "$RESTART_FILE"
+    return 0
+  fi
+  return 1
+}
+
+get_keystore_pid() {
+  pidof keystore2 2>/dev/null | awk '{print $1}'
+}
+
 is_injected() {
-    pid=$(get_keystore_pid)
-    [ -z "$pid" ] && return 1
-    grep -q "$INJECT_MARKER" "/proc/$pid/maps" 2>/dev/null
+  pid=$1
+  maps=/proc/$pid/maps
+  [ -r "$maps" ] || return 1
+
+  # 检查 payload 是否在 keystore2 的 maps 中
+  if [ -n "$TARGET_PAYLOAD" ]; then
+    local marker=$(basename "$TARGET_PAYLOAD")
+    grep -F "$marker" "$maps" >/dev/null 2>&1 && return 0
+  fi
+  # 回退：检查 inject 二进制路径
+  grep -F "$TARGET_INJECTOR" "$maps" >/dev/null 2>&1 && return 0
+  return 1
 }
 
-is_injector_running() {
-    [ -f "$PIDFILE" ] || return 1
-    pid=$(cat "$PIDFILE" 2>/dev/null)
-    [ -n "$pid" ] && [ -d "/proc/$pid" ]
+restart_keystore() {
+  pid=$1
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "[injector-daemon] restart requested; stopping keystore2 pid=$pid" >>"$TEERS_DIR/logs/injector.log"
+    kill -TERM "$pid" 2>/dev/null
+    sleep 2
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null
+    fi
+  fi
 }
 
-start_inject() {
-    [ -x "$BIN" ] || return 1
-    [ -f "$PAYLOAD" ] || return 1
-    # 显式传 <pid> <payload> <config>，不依赖 injector 自动模式的硬编码路径
-    ks=$(get_keystore_pid)
-    [ -n "$ks" ] || return 1
-    rm -f "$PIDFILE"
-    # inject 输出重定向到日志，便于排查 ptrace attach / SELinux 拒绝等失败。
-    # 之前直接后台运行导致 stderr 进 /dev/null，injector 一直静默失败无从排查。
-    nohup "$BIN" "$ks" "$PAYLOAD" "$CONFIG" >>"$TEERS_DIR/logs/injector.log" 2>&1 &
-    echo $! > "$PIDFILE"
-}
+mkdir -p "$STATE_DIR" "$TEERS_DIR/logs"
+pending_restart=0
+last_attempt_pid=
+last_attempt_at=0
+retry_cooldown=15
 
-# ---------- Main loop ----------
 while true; do
-    # Consume restart signals
-    if [ -f "$TEERS_DIR/restart.injector" ] || [ -f "$TEERS_DIR/restart.all" ]; then
-        [ -f "$TEERS_DIR/restart.injector" ] && rm -f "$TEERS_DIR/restart.injector"
-        if is_injector_running; then
-            kill "$(cat "$PIDFILE")" 2>/dev/null
-            rm -f "$PIDFILE"
-        fi
-        start_inject
-        sleep "$COOLDOWN"
-        continue
-    fi
+  if ! prepare_injector; then
+    sleep 5
+    continue
+  fi
 
-    # If injector process died, restart it
-    if ! is_injector_running; then
-        start_inject
-        sleep "$COOLDOWN"
-        continue
+  if consume_restart_request; then
+    pending_restart=1
+    restart_keystore "$(get_keystore_pid)"
+    if ! prepare_injector; then
+      sleep 5
+      continue
     fi
+  fi
 
-    # Verify keystore2 is still injected; re-inject if not
-    if keystore_alive; then
-        if ! is_injected; then
-            start_inject
-            sleep "$COOLDOWN"
-            continue
-        fi
+  pid=$(get_keystore_pid)
+  if [ -z "$pid" ]; then
+    last_attempt_pid=
+    sleep 2
+    continue
+  fi
+
+  if is_injected "$pid"; then
+    pending_restart=0
+    last_attempt_pid=
+    sleep 5
+    continue
+  fi
+
+  if [ "$last_attempt_pid" = "$pid" ] && [ "$pending_restart" -eq 0 ]; then
+    now=$(date +%s 2>/dev/null)
+    if [ -n "$now" ] && [ "$now" -lt $((last_attempt_at + retry_cooldown)) ]; then
+      sleep 5
+      continue
     fi
+  fi
 
-    sleep "$CHECK_INTERVAL"
+  echo "[injector-daemon] injecting into keystore2 pid=$pid" >>"$TEERS_DIR/logs/injector.log"
+  "$TARGET_INJECTOR" "$pid" "$TARGET_PAYLOAD" "$TEERS_DIR/injector.toml" >>"$TEERS_DIR/logs/injector.log" 2>&1
+  rc=$?
+  last_attempt_pid=$pid
+  last_attempt_at=$(date +%s 2>/dev/null)
+  pending_restart=0
+  echo "[injector-daemon] injector exited with code $rc" >>"$TEERS_DIR/logs/injector.log"
+  sleep 3
 done
