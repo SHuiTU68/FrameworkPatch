@@ -38,7 +38,9 @@ jobs:
           echo "${{ steps.setup_ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
 
       - name: Run unit tests (host)
         run: cargo test --workspace --no-fail-fast
@@ -73,7 +75,13 @@ jobs:
           cp target/aarch64-linux-android/release/libinject_payload.so module/libs/arm64-v8a/injector.payload
           # fktee-hal：KeyMint HAL 替换实现（方案 A）
           cp target/aarch64-linux-android/release/fktee-hal     module/libs/arm64-v8a/fktee-hal
-          cd module && zip -r ../output/FKTee-rs-v0.1.0.zip . -x '*.git*'
+          # 移除二进制调试信息（二次 strip，确保最小体积）
+          llvm-strip --strip-all module/libs/arm64-v8a/inject 2>/dev/null || true
+          llvm-strip --strip-all module/libs/arm64-v8a/fktee 2>/dev/null || true
+          llvm-strip --strip-all module/libs/arm64-v8a/fktee-hal 2>/dev/null || true
+          # 打包模块，排除 git 文件和模板/占位文件
+          cd module && zip -r ../output/FKTee-rs-v0.1.0.zip . \
+            -x '*.git*'
 
       - uses: actions/upload-artifact@v4
         with:

@@ -84,22 +84,24 @@ fn watch_config_changes(config_dir: &PathBuf) {
 
     // 只关心关键配置文件
     let _ = watcher.watch(&watch_path, move |event| {
-        let path = event.path.as_deref().unwrap_or(std::path::Path::new(""));
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        // notify 6.x 的 Event.paths 是 Vec<PathBuf>
+        for path in &event.paths {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
 
-        // 只对特定配置文件的变化做反应，忽略日志/状态文件
-        match name {
-            "config.toml" | "injector.toml" | "keybox.xml" | "deny.list" => {
-                log::info!("配置文件变化，准备热重载: {name}");
-                // TODO: 重新加载配置并通知 server 线程
-                // 这里发送信号给 server 线程触发重载
-            }
-            _ => {
-                // 忽略其他文件变化（日志、临时文件等），避免无限循环
-                log::debug!("忽略非配置文件的变更: {name}");
+            // 只对特定配置文件的变化做反应，忽略日志/状态文件
+            match name {
+                "config.toml" | "injector.toml" | "keybox.xml" | "deny.list" => {
+                    log::info!("配置文件变化，准备热重载: {name}");
+                    // TODO: 重新加载配置并通知 server 线程
+                    // 这里发送信号给 server 线程触发重载
+                }
+                _ => {
+                    // 忽略其他文件变化（日志、临时文件等），避免无限循环
+                    log::debug!("忽略非配置文件的变更: {name}");
+                }
             }
         }
     });
