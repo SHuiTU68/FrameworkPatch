@@ -5,8 +5,8 @@
 //! 1. PTRACE_ATTACH 目标进程
 //! 2. 保存原始寄存器
 //! 3. 扫描 /proc/<pid>/maps 获取 libc 基址
-//! 4. 在目标进程内远程调用 socket/bind/recvmsg 建立抽象命名空间 unix socket
-//! 5. 本地用 sendmsg + SCM_RIGHTS 把 payload .so 的 fd 传进目标进程
+//! 4. 在目标进程内远程调用 memfd_create 创建匿名内存文件
+//! 5. 本地通过 /proc/<pid>/fd/<memfd> 向该 memfd 写入 payload 内容
 //! 6. 远程调用 android_dlopen_ext(..., ANDROID_DLEXT_USE_LIBRARY_FD) 加载该 fd
 //! 7. 远程 dlsym 找到 entry 符号并调用
 //! 8. 恢复原始寄存器，PTRACE_DETACH
@@ -25,6 +25,22 @@ use std::path::Path;
 /// NT_PRSTATUS 常量（用于 PTRACE_GETREGSET/SETREGSET）
 #[cfg(target_arch = "aarch64")]
 const NT_PRSTATUS: libc::c_long = 1;
+
+/// AArch64 Linux syscall numbers
+#[cfg(target_arch = "aarch64")]
+const __NR_memfd_create: u64 = 279;
+#[cfg(target_arch = "aarch64")]
+const __NR_ftruncate: u64 = 46;
+#[cfg(target_arch = "aarch64")]
+const __NR_close: u64 = 57;
+
+/// memfd_create flags
+#[cfg(target_arch = "aarch64")]
+const MFD_CLOEXEC: u64 = 0x0001;
+
+/// ANDROID_DLEXT_USE_LIBRARY_FD — 通过 fd 加载 .so 的 flag
+#[cfg(target_arch = "aarch64")]
+const ANDROID_DLEXT_USE_LIBRARY_FD: u64 = 0x08;
 
 /// 读取目标进程寄存器（aarch64 使用 PTRACE_GETREGSET + NT_PRSTATUS）
 #[cfg(target_arch = "aarch64")]
@@ -372,51 +388,137 @@ fn find_remote_symbol(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64>
     find_remote_symbol_in_libdl(_pid, maps, symbol)
 }
 
-/// 远程调用 android_dlopen_ext(path, flags, &extinfo)
-/// 使用 SCM_RIGHTS fd 传递避免文件权限问题
+/// 远程调用 android_dlopen_ext 加载 payload。
 ///
-/// `_libc_base` 当前未使用（路径方式 dlopen 不需要 mmap 远程内存），
-/// 保留参数位以兼容未来 SCM_RIGHTS fd 传递实现。
+/// 使用 memfd_create + /proc/<pid>/fd/ 写入的组合方式绕过 mount namespace 隔离：
+/// 1. 在目标进程内远程调用 memfd_create 创建匿名内存文件
+/// 2. 远程调用 ftruncate 设置文件大小
+/// 3. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容
+/// 4. 远程调用 android_dlopen_ext 并传入 ANDROID_DLEXT_USE_LIBRARY_FD
+///
+/// 这比 SCM_RIGHTS 方式更简单：不需要在远程进程中建立 socket/bind/listen/accept，
+/// 也不需要本地的 sendmsg/recvmsg 配合。memfd 是内核内存文件，不依赖挂载命名空间。
 #[cfg(target_arch = "aarch64")]
 fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base: u64) -> Result<*mut std::ffi::c_void> {
-    log::debug!("远程 android_dlopen_ext(\"{}\")", path.to_str().unwrap_or("?"));
-
-    // 简化实现：直接用路径方式 dlopen（不使用 fd 传递）
-    // 完整实现应该用 SCM_RIGHTS 传 fd（参考 ForgeStore/OhMyKeymint）
-    // 这里先实现路径方式，后续迭代加 fd 传递
+    log::debug!("远程 android_dlopen_ext(\"{}\") via memfd+fd", path.to_str().unwrap_or("?"));
 
     let target_pid = Pid::from_raw(pid);
 
-    // 分配栈空间写入路径字符串
-    let path_bytes = path.as_bytes_with_nul();
-    let path_len = path_bytes.len();
-
-    // 用于查找安全返回地址的 maps（路径方式 dlopen 不需要 mmap 远程内存）
-    let maps = parse_proc_maps(pid)?;
-
-    // 在远程栈上写入路径
+    // 1. 获取原始寄存器（用于 remote_syscall 恢复）
     let regs = ptrace_getregs(pid)?;
     let sp = regs.sp;
+    let maps = parse_proc_maps(pid)?;
 
-    // 写入路径到栈上（向下生长，留对齐空间）
-    let write_addr = sp.saturating_sub(path_len as u64 + 16) & !0xF; // 16字节对齐
+    // 2. 准备远程栈数据
+    let path_bytes = path.as_bytes_with_nul();
+    let path_len = path_bytes.len();
+    let path_padded = (path_len + 15) & !15; // 16字节对齐
 
-    write_memory(pid, write_addr, path_bytes)?;
+    // "payload\0" 名称字符串
+    let payload_name = b"payload\0";
+    let payload_name_padded = 16; // 9字节补到16
 
-    // 准备参数（AArch64 调用约定）：
-    // x0 = path 指针
-    // x1 = flags (RTLD_NOW = 2)
-    // x2 = extinfo 指针 (NULL for now, 简化实现)
+    // android_dlextinfo 结构（aarch64）：40 bytes
+    // offset 0: size_t flags (8)
+    // offset 8: void* reserved_addr (8)
+    // offset 16: size_t reserved_size (8)
+    // offset 24: int relro_fd (4)
+    // offset 28: int library_fd (4)
+    // offset 32: size_t library_fd_offset (8)
+    let dlextinfo_size: u64 = 40;
+
+    // 总数据大小 + 安全边距
+    let total_data = path_padded as u64 + payload_name_padded as u64 + dlextinfo_size + 32;
+
+    let data_start = sp.saturating_sub(total_data) & !0xF;
+    let payload_name_addr = data_start;
+    let dlextinfo_addr = data_start + payload_name_padded as u64;
+    let path_addr = dlextinfo_addr + dlextinfo_size;
+    let new_sp = data_start.saturating_sub(32) & !0xF; // 留足函数调用栈空间
+
+    // 3. 写入 payload 名称字符串到远程栈
+    write_memory(pid, payload_name_addr, payload_name)?;
+
+    // 4. 写入路径字符串到远程栈（用于 android_dlopen_ext 的 path 参数，仅作命名用）
+    write_memory(pid, path_addr, path_bytes)?;
+
+    // 5. 获取 payload 文件大小
+    let file_size = std::fs::metadata(path.to_str().unwrap_or(""))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if file_size == 0 {
+        bail!("无法获取 payload 文件大小或文件为空: {}", path.to_str().unwrap_or("?"));
+    }
+
+    // 6. 远程调用 memfd_create("payload", MFD_CLOEXEC)
+    log::debug!("远程 memfd_create...");
+    let memfd = remote_syscall(
+        pid, __NR_memfd_create, payload_name_addr, MFD_CLOEXEC,
+        0, 0, 0, &regs, &maps,
+    ).context("远程 memfd_create 失败")?;
+
+    if memfd < 0 {
+        bail!("memfd_create 返回 {}，创建内存文件失败", memfd);
+    }
+    log::debug!("memfd_create 成功，fd={}", memfd);
+
+    // 7. 远程调用 ftruncate(memfd, file_size)
+    log::debug!("远程 ftruncate(memfd={}, size={})...", memfd, file_size);
+    let trunc_ret = remote_syscall(
+        pid, __NR_ftruncate, memfd as u64, file_size as u64,
+        0, 0, 0, &regs, &maps,
+    ).context("远程 ftruncate 失败")?;
+
+    if trunc_ret < 0 {
+        // ftruncate 失败，关闭 memfd 后向上报错
+        let _ = remote_syscall(pid, __NR_close, memfd as u64, 0, 0, 0, 0, &regs, &maps);
+        bail!("ftruncate 返回 {}，设置文件大小失败", trunc_ret);
+    }
+
+    // 8. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容
+    let proc_fd_path = format!("/proc/{}/fd/{}", pid, memfd);
+    log::debug!("通过 {} 写入 payload 内容...", proc_fd_path);
+    let payload_content = std::fs::read(path.to_str().unwrap_or(""))
+        .context("读取本地 payload 文件失败")?;
+
+    match std::fs::write(&proc_fd_path, &payload_content) {
+        Ok(_) => log::debug!("成功写入 {} 字节到 memfd", payload_content.len()),
+        Err(e) => {
+            // 写入失败，关闭 memfd 后向上报错
+            let _ = remote_syscall(pid, __NR_close, memfd as u64, 0, 0, 0, 0, &regs, &maps);
+            bail!("写入 payload 到 {} 失败: {e}", proc_fd_path);
+        }
+    }
+
+    // 9. 设置 android_dlextinfo 结构
+    // 标志位：ANDROID_DLEXT_USE_LIBRARY_FD
+    let mut dlextinfo_buf = Vec::with_capacity(dlextinfo_size as usize);
+    // flags: ANDROID_DLEXT_USE_LIBRARY_FD
+    dlextinfo_buf.extend_from_slice(&ANDROID_DLEXT_USE_LIBRARY_FD.to_le_bytes());
+    // reserved_addr: NULL
+    dlextinfo_buf.extend_from_slice(&0u64.to_le_bytes());
+    // reserved_size: 0
+    dlextinfo_buf.extend_from_slice(&0u64.to_le_bytes());
+    // relro_fd: -1
+    dlextinfo_buf.extend_from_slice(&(-1i32).to_le_bytes());
+    // library_fd: memfd
+    dlextinfo_buf.extend_from_slice(&(memfd as i32).to_le_bytes());
+    // library_fd_offset: 0
+    dlextinfo_buf.extend_from_slice(&0u64.to_le_bytes());
+
+    // 写入 dlextinfo 结构到远程栈
+    write_memory(pid, dlextinfo_addr, &dlextinfo_buf)?;
+
+    // 10. 远程调用 android_dlopen_ext(path, RTLD_NOW, &extinfo)
+    log::debug!("远程 android_dlopen_ext with library_fd={}...", memfd);
+
     let mut call_regs = regs;
-    call_regs.regs[0] = write_addr;
-    call_regs.regs[1] = 2; // RTLD_NOW
-    call_regs.regs[2] = 0; // extinfo = NULL
+    call_regs.regs[0] = path_addr;       // path (仅用于命名)
+    call_regs.regs[1] = 2;               // RTLD_NOW
+    call_regs.regs[2] = dlextinfo_addr;  // &extinfo
     call_regs.pc = dlopen_ext_addr;
-    // LR (x30) 设为一个安全返回地址（找一段非可执行的区域）
     call_regs.regs[30] = find_safe_return_addr(&maps);
-
-    // 设置 SP
-    call_regs.sp = write_addr & !0xF;
+    call_regs.sp = new_sp;
 
     ptrace_setregs(pid, &call_regs)?;
     let ret = unsafe {
@@ -428,17 +530,20 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base:
         )
     };
     if ret == -1 {
+        // 恢复 SP
+        let mut restore_regs = call_regs;
+        restore_regs.sp = sp;
+        let _ = ptrace_setregs(pid, &restore_regs);
+        // 关闭 memfd
+        let _ = remote_syscall(pid, __NR_close, memfd as u64, 0, 0, 0, 0, &regs, &maps);
         bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
     }
-
-    // 等待远程调用完成
     waitpid(target_pid, None)?;
 
-    // 读取返回值
     let result_regs = ptrace_getregs(pid)?;
     let handle = result_regs.regs[0] as *mut std::ffi::c_void;
 
-    // 如果返回 NULL，尝试获取远程 dlerror 信息
+    // 11. 如果返回 NULL，尝试获取远程 dlerror 信息
     if handle.is_null() {
         let dlerror_msg = remote_get_dlerror(pid, &maps);
         if let Some(msg) = dlerror_msg {
@@ -448,7 +553,10 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base:
         }
     }
 
-    // 恢复原始 SP（恢复内存）
+    // 12. 关闭 memfd
+    let _ = remote_syscall(pid, __NR_close, memfd as u64, 0, 0, 0, 0, &regs, &maps);
+
+    // 恢复 SP
     let mut restore_regs = call_regs;
     restore_regs.sp = sp;
     let _ = ptrace_setregs(pid, &restore_regs);
@@ -647,6 +755,64 @@ fn find_safe_return_addr(maps: &[MapEntry]) -> u64 {
         .find(|m| !m.perms.contains('x') && m.perms.contains('r'))
         .map(|m| m.start)
         .unwrap_or(0)
+}
+
+/// 在远程进程中调用 libc::syscall(number, arg1..arg5)。
+///
+/// 返回 syscall 的原始返回值（失败时返回 -1，不会自动 bail）。
+/// 调用方需自行检查返回值并解释错误。
+///
+/// 注意：调用完成后**不会自动恢复原始寄存器**。调用方必须确保在
+/// `do_inject` 返回前统一恢复原始寄存器（由 `do_inject` 的 finally 块保证）。
+/// 本函数只会修改 PC、SP 和 x0-x5、x30，并从原始寄存器快照派生出临时寄存器值。
+#[cfg(target_arch = "aarch64")]
+fn remote_syscall(
+    pid: i32,
+    number: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+    saved_regs: &libc::user_regs_struct,
+    maps: &[MapEntry],
+) -> Result<i64> {
+    let syscall_addr = find_remote_symbol(pid, maps, "syscall")
+        .ok_or_else(|| anyhow::anyhow!("找不到 syscall 符号"))?;
+
+    let target_pid = Pid::from_raw(pid);
+
+    let mut call_regs = *saved_regs;
+    // syscall() 调用约定（aarch64）：
+    // x0 = syscall number
+    // x1..x5 = syscall arguments
+    call_regs.regs[0] = number;
+    call_regs.regs[1] = arg1;
+    call_regs.regs[2] = arg2;
+    call_regs.regs[3] = arg3;
+    call_regs.regs[4] = arg4;
+    call_regs.regs[5] = arg5;
+    call_regs.pc = syscall_addr;
+    call_regs.regs[30] = find_safe_return_addr(maps);
+
+    ptrace_setregs(pid, &call_regs)?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        bail!("PTRACE_CONT 失败: {}", std::io::Error::last_os_error());
+    }
+    waitpid(target_pid, None)?;
+
+    let result_regs = ptrace_getregs(pid)?;
+    let result = result_regs.regs[0] as i64;
+
+    Ok(result)
 }
 
 /// 从目标进程 detach。

@@ -76,11 +76,83 @@ pub struct Keybox {
 
 impl Keybox {
     /// 从 keybox.xml 文本解析。
+    ///
+    /// 支持多种 XML 格式：
+    /// - `<keybox>` / `<Keybox>` / `<KEYBOX>` 等变体根元素名
+    /// - `<AndroidAttestation>` AOSP 标准格式
+    /// - `<Key>` / `<key>`（大小写不敏感）元素名
     pub fn from_xml(xml: &str) -> Result<Self> {
+        // 尝试直接解析（XmlKeybox 已标注 serde(rename = "keybox")）
+        let result = Self::parse_xml_inner(xml);
+        if let Ok(kb) = result {
+            return Ok(kb);
+        }
+
+        // 尝试替换根元素名称为 <keybox>（处理 <Keybox> / <KEYBOX> / <AndroidAttestation> 等）
+        let root_variants = ["Keybox", "KEYBOX", "AndroidAttestation", "keymaster", "Keymaster"];
+        for root in &root_variants {
+            let normalized = xml
+                .replace(&format!("<{root}>"), "<keybox>")
+                .replace(&format!("</{root}>"), "</keybox>");
+            let result = Self::parse_xml_inner(&normalized);
+            if let Ok(kb) = result {
+                return Ok(kb);
+            }
+        }
+
+        // 最后尝试：把 XML 整体转为小写根元素 + <Key> 统一格式
+        let lower = xml
+            .to_lowercase()
+            // 把常见根元素统一为 <keybox>
+            .replace("<androidattestation>", "<keybox>")
+            .replace("</androidattestation>", "</keybox>")
+            .replace("<keymaster>", "<keybox>")
+            .replace("</keymaster>", "</keybox>")
+            // 把 <key> 统一为 <Key>
+            .replace("<key>", "<Key>")
+            .replace("</key>", "</Key>");
+        let result = Self::parse_xml_inner(&lower);
+        if let Ok(kb) = result {
+            return Ok(kb);
+        }
+
+        // 所有格式都解析失败，给出详细错误信息
+        let preview: String = xml.chars().take(200).collect();
+        anyhow::bail!(
+            "keybox.xml 中没有找到任何 <Key> 元素。XML 前 200 字符: {preview}..."
+        );
+    }
+
+    /// 内部解析：尝试一次 XML 解析，返回 `Keybox` 或失败。
+    fn parse_xml_inner(xml: &str) -> Result<Self> {
         let raw: XmlKeybox = quick_xml::de::from_str(xml)
             .map_err(|e| anyhow::anyhow!("parse keybox.xml failed: {e}"))?;
+
+        // 如果找到了 <Key>，直接构建
+        if !raw.keys.is_empty() {
+            return Self::build_from_keys(raw.keys);
+        }
+
+        // 尝试把 <key> / <KEY> 等变体统一替换为 <Key> 后重新解析
+        let normalized = xml
+            .replace("<key>", "<Key>")
+            .replace("</key>", "</Key>")
+            .replace("<key ", "<Key ")
+            .replace("</key ", "</Key ");
+        let raw2: XmlKeybox = quick_xml::de::from_str(&normalized)
+            .map_err(|e| anyhow::anyhow!("parse keybox.xml (normalized) failed: {e}"))?;
+
+        if !raw2.keys.is_empty() {
+            return Self::build_from_keys(raw2.keys);
+        }
+
+        anyhow::bail!("no <Key> elements found in XML");
+    }
+
+    /// 从解析后的 `XmlKey` 列表构建 `Keybox`。
+    fn build_from_keys(xml_keys: Vec<XmlKey>) -> Result<Self> {
         let mut keys = Vec::new();
-        for k in raw.keys {
+        for k in xml_keys {
             let algorithm = KeyAlgorithm::from_str(&k.algorithm)
                 .ok_or_else(|| anyhow::anyhow!("unknown keybox algorithm: {}", k.algorithm))?;
             ensure!(
@@ -118,6 +190,7 @@ impl Keybox {
 // ===================== quick-xml 反序列化结构 =====================
 
 #[derive(Deserialize, Debug)]
+#[serde(rename = "keybox")]
 struct XmlKeybox {
     #[serde(rename = "Key", default)]
     keys: Vec<XmlKey>,
@@ -125,11 +198,11 @@ struct XmlKeybox {
 
 #[derive(Deserialize, Debug)]
 struct XmlKey {
-    #[serde(rename = "@algorithm")]
+    #[serde(rename = "@algorithm", default)]
     algorithm: String,
-    #[serde(rename = "PrivateKey")]
+    #[serde(rename = "PrivateKey", default)]
     private_key: XmlPemText,
-    #[serde(rename = "CertificateChain")]
+    #[serde(rename = "CertificateChain", default)]
     certificate_chain: XmlCertificateChain,
 }
 
