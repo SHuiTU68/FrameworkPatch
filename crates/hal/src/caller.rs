@@ -1,7 +1,7 @@
 //! 调用方 UID → 包名映射。
 //!
 //! binder 调用自带 caller UID（`rsbinder::ThreadState::get_calling_uid()`），
-//! 反查 `/data/system/packages.list` 得到该 uid 的所有包名，用于黑名单匹配。
+//! 反查 `/data/system/packages.list` 得到该 uid 的所有包名，用于白名单匹配。
 //!
 //! packages.list 每行格式：
 //! `<packageName> <uid> <debugFlag> <dataPath> <seinfo> ...`

@@ -305,7 +305,7 @@ fn find_lib_base(maps: &[MapEntry], lib_name: &str) -> Option<u64> {
 ///
 /// `dlsym` 和 `android_dlopen_ext` 都在 libdl.so 中，用这个专门的函数
 /// 直接通过 libdl.so 基址计算偏移，比通用 find_remote_symbol 更可靠。
-fn find_remote_symbol_in_libdl(pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64> {
+fn find_remote_symbol_in_libdl(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64> {
     let remote_libdl = find_lib_base(maps, "libdl.so")?;
     let local_maps = parse_proc_maps(nix::unistd::getpid().as_raw()).ok()?;
     let local_libdl = find_lib_base(&local_maps, "libdl.so")?;

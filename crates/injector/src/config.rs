@@ -1,18 +1,17 @@
 //! injector.toml 配置解析
 //!
-//! **全局 hook + 黑名单模型**：FKTee-rs 注入到 keystore2 后，所有走 keystore2 的
-//! attestation 请求一律用本模块的 keybox 签发伪造证书链——不再按应用白名单
-//! 过滤。黑名单 `[hook].deny_packages`（或独立的 `deny.list` 文件）中列出的
-//! 应用包名会被豁免（透传原始 attestation），用于保留个别敏感应用的真实证书。
+//! **白名单模型**：FKTee-rs 注入到 keystore2 后，仅对 `allow_packages`（或独立的
+//! `allow.list` 文件）中列出的应用包名进行 attestation 伪造。未列出的应用
+//! 透传原始 attestation，保持真实硬件证书。
 //!
-//! 黑名单优先级：`deny.list` 文件（每行一个包名）覆盖 toml 里的
-//! `deny_packages`，便于 WebUI 直接编辑单个文件而无需重写整个 toml。
+//! 白名单优先级：`allow.list` 文件（每行一个包名）覆盖 toml 里的
+//! `allow_packages`，便于 WebUI 直接编辑单个文件而无需重写整个 toml。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// injector 配置（全局）。
+/// injector 配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InjectorConfig {
     #[serde(default)]
@@ -21,18 +20,18 @@ pub struct InjectorConfig {
     pub intercept: InterceptConfig,
 }
 
-/// 全局 hook 开关 + 黑名单。
+/// 白名单 hook 配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
-    /// 全局总开关。
-    /// - `true`：所有应用的 keystore2 attestation 都用 keybox 伪造。
+    /// 总开关。
+    /// - `true`：对 `allow_packages` 中的应用进行 attestation 伪造。
     /// - `false`：hook 不生效，全部放行（透传原始事务）。
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// 黑名单：列出的包名不会被伪造（透传原始 attestation）。
-    /// 可在 toml 声明，运行时也会被 `deny.list` 文件覆盖。
+    /// 白名单：仅对列出的包名进行伪造。空列表 = 不伪造任何应用。
+    /// 可在 toml 声明，运行时也会被 `allow.list` 文件覆盖。
     #[serde(default)]
-    pub deny_packages: Vec<String>,
+    pub allow_packages: Vec<String>,
 }
 
 fn default_enabled() -> bool {
@@ -47,7 +46,7 @@ impl Default for HookConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
-            deny_packages: Vec::new(),
+            allow_packages: Vec::new(),
         }
     }
 }
@@ -102,18 +101,18 @@ impl InjectorConfig {
         }
 
         let content = std::fs::read_to_string(path)?;
-        let mut config: Self = toml::from_str(&content)?;
+        let config: Self = toml::from_str(&content)?;
         log::info!(
-            "配置加载完成: hook.enabled={} deny={} (全局模式，所有应用生效)",
+            "配置加载完成: hook.enabled={} allow={} (白名单模式)",
             config.hook.enabled,
-            config.hook.deny_packages.len()
+            config.hook.allow_packages.len()
         );
         Ok(config)
     }
 
-    /// 从 `deny.list` 文件覆盖加载黑名单（每行一个包名，跳过空行与 `#` 注释）。
-    /// 文件不存在则保留 toml 中已有的 `deny_packages`。
-    pub fn load_deny_list(&mut self, path: &Path) {
+    /// 从 `allow.list` 文件覆盖加载白名单（每行一个包名，跳过空行与 `#` 注释）。
+    /// 文件不存在则保留 toml 中已有的 `allow_packages`。
+    pub fn load_allow_list(&mut self, path: &Path) {
         let Ok(content) = std::fs::read_to_string(path) else {
             return;
         };
@@ -124,17 +123,17 @@ impl InjectorConfig {
             .map(str::to_string)
             .collect();
         if !pkgs.is_empty() {
-            self.hook.deny_packages = pkgs;
+            self.hook.allow_packages = pkgs;
         }
-        log::info!("黑名单加载: {} 个包", self.hook.deny_packages.len());
+        log::info!("白名单加载: {} 个包", self.hook.allow_packages.len());
     }
 
-    /// hook 是否对指定包名生效（全局开关开 + 包名不在黑名单）。
+    /// hook 是否对指定包名生效（白名单模式：仅在 allow_packages 中的包被伪造）。
     pub fn should_forge(&self, package: &str) -> bool {
-        self.hook.enabled && !self.hook.deny_packages.iter().any(|p| p == package)
+        self.hook.enabled && self.hook.allow_packages.iter().any(|p| p == package)
     }
 
-    /// hook 是否生效（不考虑黑名单）。
+    /// hook 是否生效（不考虑白名单）。
     pub fn is_active(&self) -> bool {
         self.hook.enabled
     }
@@ -147,9 +146,10 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = InjectorConfig::default();
-        assert!(cfg.hook.enabled, "默认应为全局启用");
+        assert!(cfg.hook.enabled, "默认应启用");
         assert!(cfg.is_active());
-        assert!(cfg.should_forge("com.any.app"));
+        // 空白名单 = 不伪造任何应用
+        assert!(!cfg.should_forge("com.any.app"));
     }
 
     #[test]
@@ -161,11 +161,18 @@ mod tests {
     }
 
     #[test]
-    fn test_deny_list() {
+    fn test_allow_list() {
         let mut cfg = InjectorConfig::default();
-        cfg.hook.deny_packages = vec!["com.bank.app".into()];
-        assert!(!cfg.should_forge("com.bank.app"));
-        assert!(cfg.should_forge("com.other.app"));
+        cfg.hook.allow_packages = vec!["com.target.app".into()];
+        assert!(cfg.should_forge("com.target.app"));
+        assert!(!cfg.should_forge("com.other.app"));
+    }
+
+    #[test]
+    fn test_empty_allow_list() {
+        let cfg = InjectorConfig::default();
+        // 空白名单时，即使 enabled=true，也不伪造任何应用
+        assert!(!cfg.should_forge("com.any.app"));
     }
 
     #[test]
@@ -185,14 +192,15 @@ get_key_entry = false
     }
 
     #[test]
-    fn test_parse_deny_packages() {
+    fn test_parse_allow_packages() {
         let toml = r#"
 [hook]
 enabled = true
-deny_packages = ["com.a", "com.b"]
+allow_packages = ["com.a", "com.b"]
 "#;
         let cfg: InjectorConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.hook.deny_packages.len(), 2);
-        assert!(!cfg.should_forge("com.a"));
+        assert_eq!(cfg.hook.allow_packages.len(), 2);
+        assert!(cfg.should_forge("com.a"));
+        assert!(!cfg.should_forge("com.c"));
     }
 }

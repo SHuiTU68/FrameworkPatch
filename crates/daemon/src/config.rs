@@ -2,15 +2,15 @@
 //!
 //! 参考 OhMyKeymint 的 config.rs 设计：
 //! - [`DaemonConfig`]：daemon 自身配置（后端模式、verified boot 伪装、密钥种子、日志）。
-//! - [`InjectorConfig`]：注入器 hook 配置（全局开关 + 各事务拦截开关）。
+//! - [`InjectorConfig`]：注入器 hook 配置（白名单模式）。
 //!
 //! 注意：`InjectorConfig` 在此镜像了 `crates/injector/src/config.rs` 的结构。
 //! 由于 injector crate 当前仅以 cdylib 形式提供（其 `config.rs` 属于 bin），
 //! daemon 无法直接复用，故在此独立定义一份等价实现，保持 main.rs / server.rs
 //! 通过 `crate::config::InjectorConfig` 访问。
 //!
-//! **全局 hook 模型**：不再按应用白名单过滤，所有走 keystore2 的 attestation
-//! 请求一律用 keybox 伪造。`[hook].enabled` 是唯一总开关。
+//! **白名单模型**：仅对 `allow_packages` 中列出的应用进行 attestation 伪造。
+//! 未列出的应用透传原始 attestation。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -176,7 +176,7 @@ impl DaemonConfig {
 
 // ===================== 注入器配置（镜像 injector crate） =====================
 
-/// injector 配置（全局 hook + 黑名单模型）。
+/// injector 配置（白名单模式）。
 ///
 /// 与 `crates/injector/src/config.rs` 等价。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,16 +187,16 @@ pub struct InjectorConfig {
     pub intercept: InterceptConfig,
 }
 
-/// 全局 hook 开关 + 黑名单。
+/// 白名单 hook 配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
-    /// 全局总开关：`true` = 所有应用走 keystore2 的 attestation 都用 keybox 伪造。
+    /// 总开关：`true` = 对白名单中的应用进行 attestation 伪造。
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// 黑名单：列出的包名不会被伪造（透传原始 attestation）。
-    /// 可在 toml 声明，运行时也会被 `deny.list` 文件覆盖。
+    /// 白名单：仅对列出的包名进行伪造。空列表 = 不伪造任何应用。
+    /// 可在 toml 声明，运行时也会被 `allow.list` 文件覆盖。
     #[serde(default)]
-    pub deny_packages: Vec<String>,
+    pub allow_packages: Vec<String>,
 }
 
 fn default_enabled() -> bool {
@@ -211,7 +211,7 @@ impl Default for HookConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
-            deny_packages: Vec::new(),
+            allow_packages: Vec::new(),
         }
     }
 }
@@ -267,15 +267,15 @@ impl InjectorConfig {
         let content = std::fs::read_to_string(path)?;
         let mut config: Self = toml::from_str(&content)?;
         log::info!(
-            "配置加载完成: hook.enabled={} deny={} (全局模式，所有应用生效)",
+            "配置加载完成: hook.enabled={} allow={} (白名单模式)",
             config.hook.enabled,
-            config.hook.deny_packages.len()
+            config.hook.allow_packages.len()
         );
         Ok(config)
     }
 
-    /// 从 `deny.list` 文件覆盖加载黑名单（每行一个包名，跳过空行与 `#` 注释）。
-    pub fn load_deny_list(&mut self, path: &Path) {
+    /// 从 `allow.list` 文件覆盖加载白名单（每行一个包名，跳过空行与 `#` 注释）。
+    pub fn load_allow_list(&mut self, path: &Path) {
         let Ok(content) = std::fs::read_to_string(path) else {
             return;
         };
@@ -286,17 +286,17 @@ impl InjectorConfig {
             .map(str::to_string)
             .collect();
         if !pkgs.is_empty() {
-            self.hook.deny_packages = pkgs;
+            self.hook.allow_packages = pkgs;
         }
-        log::info!("黑名单加载: {} 个包", self.hook.deny_packages.len());
+        log::info!("白名单加载: {} 个包", self.hook.allow_packages.len());
     }
 
-    /// hook 是否对指定包名生效（全局开关开 + 包名不在黑名单）。
+    /// hook 是否对指定包名生效（白名单模式：仅在 allow_packages 中的包被伪造）。
     pub fn should_forge(&self, package: &str) -> bool {
-        self.hook.enabled && !self.hook.deny_packages.iter().any(|p| p == package)
+        self.hook.enabled && self.hook.allow_packages.iter().any(|p| p == package)
     }
 
-    /// hook 是否生效（不考虑黑名单）。
+    /// hook 是否生效（不考虑白名单）。
     pub fn is_active(&self) -> bool {
         self.hook.enabled
     }

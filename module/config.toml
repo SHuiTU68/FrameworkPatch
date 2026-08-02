@@ -1,5 +1,5 @@
 [backend]
-mode = "injector"  # injector | hal
+mode = "hal"  # injector | hal
 
 [trust]
 verified_boot_state = "green"

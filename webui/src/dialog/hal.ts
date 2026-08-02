@@ -50,7 +50,7 @@ export class HalDialog {
           </label>
           <md-outlined-text-field id="hal-real_hal_instance" label="${i18n.t('hal_real_hal_instance')}" autocapitalize="none"></md-outlined-text-field>
           <md-outlined-text-field id="hal-keybox_path" label="${i18n.t('hal_keybox_path')}" autocapitalize="none"></md-outlined-text-field>
-          <md-outlined-text-field id="hal-deny_list_path" label="${i18n.t('hal_deny_list_path')}" autocapitalize="none"></md-outlined-text-field>
+          <md-outlined-text-field id="hal-allow_list_path" label="${i18n.t('hal_allow_list_path')}" autocapitalize="none"></md-outlined-text-field>
           <md-divider></md-divider>
           <div class="cfg-section-title">${i18n.t('hal_device')}</div>
           <div class="hal-hint">${i18n.t('hal_device_auto_hint')}</div>
@@ -115,7 +115,7 @@ export class HalDialog {
     }
     setText('hal-real_hal_instance', hal.real_hal_instance)
     setText('hal-keybox_path', hal.keybox_path)
-    setText('hal-deny_list_path', hal.deny_list_path)
+    setText('hal-allow_list_path', hal.allow_list_path)
 
     const device = (hal.device as Toml | undefined) ?? {}
     for (const f of DEVICE_FIELDS) {
@@ -148,7 +148,7 @@ export class HalDialog {
     const getText = (id: string): string => this.#dialog?.querySelector<MdOutlinedTextField>(`#${id}`)?.value.trim() ?? ''
     hal.real_hal_instance = getText('hal-real_hal_instance') || 'fktee-real'
     hal.keybox_path = getText('hal-keybox_path') || '/data/adb/Tee-rs/keybox.xml'
-    hal.deny_list_path = getText('hal-deny_list_path') || '/data/adb/Tee-rs/deny.list'
+    hal.allow_list_path = getText('hal-allow_list_path') || '/data/adb/Tee-rs/allow.list'
 
     // device 段
     if (!hal.device) hal.device = {}

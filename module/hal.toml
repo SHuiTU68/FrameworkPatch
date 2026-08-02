@@ -19,12 +19,12 @@ real_hal_instance = "fktee-real"
 # keybox.xml 路径（与 inject 路径共用）。
 keybox_path = "/data/adb/Tee-rs/keybox.xml"
 
-# 黑名单文件路径（每行一个包名，# 与空行跳过）。
-deny_list_path = "/data/adb/Tee-rs/deny.list"
+# 白名单文件路径（每行一个包名，# 与空行跳过）。
+allow_list_path = "/data/adb/Tee-rs/allow.list"
 
 [hook]
-# 全局总开关。
-# true  = generateKey/importKey 含 attestation challenge 时用 keybox 伪造证书链
+# 总开关。
+# true  = 对 allow.list 中列出的应用进行 attestation 伪造
 # false = 纯代理，所有事务透传真 HAL（用于调试 / 紧急关闭）
 enabled = true
 
@@ -38,8 +38,8 @@ enabled = true
 #                 （对应 TEESimulator ? Force Leaf Hacking）
 forge_mode = "auto"
 
-# 黑名单包名（可选）。deny.list 文件存在时覆盖此声明。
-# deny_packages = ["com.example.app"]
+# 白名单包名（可选）。allow.list 文件存在时覆盖此声明。
+# allow_packages = ["com.example.app"]
 
 [device]
 # DeviceInfo 字段。**auto 语义**：值为 0 或 -1 = 自动从系统 prop 读取真实值；

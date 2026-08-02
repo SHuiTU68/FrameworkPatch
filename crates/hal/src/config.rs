@@ -1,11 +1,11 @@
 //! fktee-hal 配置（`hal.toml`）。
 //!
-//! 与 daemon 的 `injector.toml` 共享黑名单语义，但只读 HAL 自身需要的字段：
+//! 与 daemon 的 `injector.toml` 共享白名单语义，但只读 HAL 自身需要的字段：
 //! - `real_hal_instance`：真 HAL 被 vintf manifest 重命名后的实例名
 //!   （fktee-hal 抢占 `default`，按此名 wait_for_interface 拿真 HAL 代理）。
-//! - `hook.enabled` / `hook.deny_packages`：全局开关 + 黑名单（与 injector 同义）。
+//! - `hook.enabled` / `hook.allow_packages`：全局开关 + 白名单（与 injector 同义）。
 //! - `keybox_path`：keybox.xml 路径（默认 `/data/adb/Tee-rs/keybox.xml`）。
-//! - `deny_list_path`：黑名单文件路径（默认 `/data/adb/Tee-rs/deny.list`）。
+//! - `allow_list_path`：白名单文件路径（默认 `/data/adb/Tee-rs/allow.list`）。
 //! - `device`：DeviceInfo 默认值（缺失字段由 certgen 兜底）。
 //!
 //! 文件缺失 / 解析失败时回退默认值，不抛错——避免 HAL 启动失败卡死 keystore2。
@@ -27,8 +27,8 @@ pub struct HalConfig {
     #[serde(default = "default_keybox_path")]
     pub keybox_path: PathBuf,
 
-    #[serde(default = "default_deny_list_path")]
-    pub deny_list_path: PathBuf,
+    #[serde(default = "default_allow_list_path")]
+    pub allow_list_path: PathBuf,
 
     #[serde(default)]
     pub device: DeviceDefaults,
@@ -42,19 +42,20 @@ fn default_keybox_path() -> PathBuf {
     PathBuf::from("/data/adb/Tee-rs/keybox.xml")
 }
 
-fn default_deny_list_path() -> PathBuf {
-    PathBuf::from("/data/adb/Tee-rs/deny.list")
+fn default_allow_list_path() -> PathBuf {
+    PathBuf::from("/data/adb/Tee-rs/allow.list")
 }
 
-/// 全局 hook 开关 + 黑名单（语义与 daemon `HookConfig` 一致）。
+/// 全局 hook 开关 + 白名单（语义与 daemon `HookConfig` 一致）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
     /// 全局总开关：`false` 时所有事务透传真 HAL，不伪造。
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// 黑名单：列出的包名走真 HAL（不伪造）。运行时被 `deny_list_path` 文件覆盖。
+    /// 白名单：仅对列出的包名进行伪造。空列表 = 不伪造任何应用。
+    /// 运行时被 `allow_list_path` 文件覆盖。
     #[serde(default)]
-    pub deny_packages: Vec<String>,
+    pub allow_packages: Vec<String>,
     /// 伪造模式（参考 TEESimulator 的 `!` / `?` 概念）：
     /// - `auto`        : 自动选择（当前等价 generation）。
     /// - `generation`  : 软件生成完整虚拟密钥，keyBlob 与 leaf 证书公钥一致
@@ -98,7 +99,7 @@ impl Default for HookConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            deny_packages: Vec::new(),
+            allow_packages: Vec::new(),
             forge_mode: ForgeMode::default(),
         }
     }
@@ -151,7 +152,7 @@ impl Default for HalConfig {
             real_hal_instance: default_real_hal_instance(),
             hook: HookConfig::default(),
             keybox_path: default_keybox_path(),
-            deny_list_path: default_deny_list_path(),
+            allow_list_path: default_allow_list_path(),
             device: DeviceDefaults::default(),
         }
     }
@@ -171,10 +172,10 @@ impl HalConfig {
         match toml::from_str::<Self>(&content) {
             Ok(cfg) => {
                 log::info!(
-                    "hal 配置加载: real={} enabled={} deny={}",
+                    "hal 配置加载: real={} enabled={} allow={} (白名单模式)",
                     cfg.real_hal_instance,
                     cfg.hook.enabled,
-                    cfg.hook.deny_packages.len()
+                    cfg.hook.allow_packages.len()
                 );
                 cfg
             }
@@ -185,9 +186,9 @@ impl HalConfig {
         }
     }
 
-    /// 从 `deny.list` 文件覆盖黑名单（每行一个包名，`#` 与空行跳过）。
-    pub fn load_deny_list(&mut self) {
-        let Ok(content) = std::fs::read_to_string(&self.deny_list_path) else {
+    /// 从 `allow.list` 文件覆盖白名单（每行一个包名，`#` 与空行跳过）。
+    pub fn load_allow_list(&mut self) {
+        let Ok(content) = std::fs::read_to_string(&self.allow_list_path) else {
             return;
         };
         let pkgs: Vec<String> = content
@@ -197,8 +198,8 @@ impl HalConfig {
             .map(str::to_string)
             .collect();
         if !pkgs.is_empty() {
-            self.hook.deny_packages = pkgs;
+            self.hook.allow_packages = pkgs;
         }
-        log::info!("hal 黑名单加载: {} 个包", self.hook.deny_packages.len());
+        log::info!("hal 白名单加载: {} 个包", self.hook.allow_packages.len());
     }
 }

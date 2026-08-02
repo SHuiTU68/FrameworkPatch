@@ -84,12 +84,12 @@ impl KeyMintProxy {
         s
     }
 
-    /// 重新加载 keybox + deny.list（收到 SIGHUP 或文件变更时调用）。
+    /// 重新加载 keybox + allow.list（收到 SIGHUP 或文件变更时调用）。
     #[allow(dead_code)]
     fn reload(&self) {
         let kb_path = self.cfg.read().keybox_path.clone();
         let mut c = self.cfg.write();
-        c.load_deny_list();
+        c.load_allow_list();
         drop(c);
         *self.keybox_xml.write() = load_keybox(&kb_path);
         log::info!("fktee-hal: 配置热重载完成");
@@ -102,19 +102,19 @@ impl KeyMintProxy {
         if !cfg.hook.enabled {
             return false;
         }
-        if cfg.hook.deny_packages.is_empty() {
-            return true;
+        // 白名单模式：仅对 allow_packages 中列出的包进行伪造
+        if cfg.hook.allow_packages.is_empty() {
+            return false;
         }
-        // caller_pkg 已由 caller::packages_for_uid 解析；若为空（packages.list 不可读）
-        // 保守不豁免（继续伪造）——黑名单是可选安全网。
+        // 若 caller_pkg 为空（packages.list 不可读），保守不伪造
         if caller_pkg.is_empty() {
-            return true;
+            return false;
         }
-        let denied = cfg.hook.deny_packages.iter().any(|p| p == caller_pkg);
-        if denied {
-            log::debug!("fktee-hal: uid={caller_uid} pkg={caller_pkg} 命中黑名单，透传");
+        let allowed = cfg.hook.allow_packages.iter().any(|p| p == caller_pkg);
+        if !allowed {
+            log::debug!("fktee-hal: uid={caller_uid} pkg={caller_pkg} 不在白名单中，透传");
         }
-        !denied
+        allowed
     }
 
     /// 取真 HAL 代理；失败返回 Unknown（generic binder error）。
@@ -457,7 +457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 配置：/data/adb/Tee-rs/hal.toml（缺失走默认）。
     let cfg_path = std::path::Path::new("/data/adb/Tee-rs/hal.toml");
     let mut cfg = HalConfig::load(cfg_path);
-    cfg.load_deny_list();
+    cfg.load_allow_list();
 
     // 初始化 binder 进程状态。
     ProcessState::init_default()?;
