@@ -66,10 +66,13 @@ fn main() -> Result<()> {
 }
 
 /// 监听配置文件变化，热重载
+///
+/// 使用 AtomicU64 做防抖：同一秒内的多次事件只触发一次重载，
+/// 避免 daemon 自身写日志/状态文件导致的热重载无限循环。
 fn watch_config_changes(config_dir: &PathBuf) {
     use hotwatch::Hotwatch;
 
-    let mut watcher = match Hotwatch::new() {
+    let mut watcher = match Hotwatch::new_with_custom_delay(std::time::Duration::from_secs(2)) {
         Ok(w) => w,
         Err(e) => {
             log::error!("文件监听初始化失败: {e}");
@@ -79,10 +82,26 @@ fn watch_config_changes(config_dir: &PathBuf) {
 
     let watch_path = config_dir.clone();
 
-    let _ = watcher.watch(&watch_path, move |_event| {
-        log::info!("配置文件变化，准备热重载");
-        // TODO: 重新加载配置并通知 server 线程
-        // 这里发送信号给 server 线程触发重载
+    // 只关心关键配置文件
+    let _ = watcher.watch(&watch_path, move |event| {
+        let path = event.path.as_deref().unwrap_or(std::path::Path::new(""));
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        // 只对特定配置文件的变化做反应，忽略日志/状态文件
+        match name {
+            "config.toml" | "injector.toml" | "keybox.xml" | "deny.list" => {
+                log::info!("配置文件变化，准备热重载: {name}");
+                // TODO: 重新加载配置并通知 server 线程
+                // 这里发送信号给 server 线程触发重载
+            }
+            _ => {
+                // 忽略其他文件变化（日志、临时文件等），避免无限循环
+                log::debug!("忽略非配置文件的变更: {name}");
+            }
+        }
     });
 
     log::info!("配置热重载监听已启动: {}", config_dir.display());

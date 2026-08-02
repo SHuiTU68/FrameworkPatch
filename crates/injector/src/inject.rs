@@ -438,12 +438,92 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base:
     let result_regs = ptrace_getregs(pid)?;
     let handle = result_regs.regs[0] as *mut std::ffi::c_void;
 
+    // 如果返回 NULL，尝试获取远程 dlerror 信息
+    if handle.is_null() {
+        let dlerror_msg = remote_get_dlerror(pid, &maps);
+        if let Some(msg) = dlerror_msg {
+            log::error!("远程 android_dlopen_ext 失败: dlerror={msg}");
+        } else {
+            log::error!("远程 android_dlopen_ext 失败（无法获取 dlerror）");
+        }
+    }
+
     // 恢复原始 SP（恢复内存）
     let mut restore_regs = call_regs;
     restore_regs.sp = sp;
     let _ = ptrace_setregs(pid, &restore_regs);
 
     Ok(handle)
+}
+
+/// 远程调用 dlerror() 获取错误信息
+///
+/// 在目标进程中调用 dlerror()，读取返回的字符串内容。
+/// 用于 android_dlopen_ext 失败时获取详细的错误原因。
+#[cfg(target_arch = "aarch64")]
+fn remote_get_dlerror(pid: i32, maps: &[MapEntry]) -> Option<String> {
+    let dlerror_addr = find_remote_symbol_in_libdl(pid, maps, "dlerror")
+        .or_else(|| find_remote_symbol(pid, maps, "dlerror"))?;
+
+    let target_pid = Pid::from_raw(pid);
+
+    let regs = ptrace_getregs(pid).ok()?;
+    let mut call_regs = regs;
+    call_regs.regs[0] = 0; // dlerror() 无参数
+    call_regs.pc = dlerror_addr;
+    call_regs.regs[30] = find_safe_return_addr(maps);
+
+    ptrace_setregs(pid, &call_regs).ok()?;
+    let ret = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            std::ptr::null_mut::<libc::c_void>(),
+        )
+    };
+    if ret == -1 {
+        return None;
+    }
+    waitpid(target_pid, None).ok()?;
+
+    let result_regs = ptrace_getregs(pid).ok()?;
+    let msg_ptr = result_regs.regs[0];
+
+    // 恢复原始寄存器
+    let _ = ptrace_setregs(pid, &regs);
+
+    if msg_ptr == 0 {
+        return None;
+    }
+
+    // 读取远程内存中的字符串（最多 256 字节）
+    let mut buf = [0u8; 256];
+    let mut read = 0;
+    while read < buf.len() {
+        let word = unsafe {
+            libc::ptrace(
+                libc::PTRACE_PEEKDATA,
+                pid,
+                (msg_ptr + read as u64) as *mut libc::c_void,
+                std::ptr::null_mut::<libc::c_void>(),
+            )
+        };
+        if word == -1 {
+            break;
+        }
+        let bytes = word.to_ne_bytes();
+        let copy_len = std::cmp::min(8, buf.len() - read);
+        buf[read..read + copy_len].copy_from_slice(&bytes[..copy_len]);
+        // 遇到 null 终止符则停止
+        if bytes[0] == 0 {
+            break;
+        }
+        read += copy_len;
+    }
+
+    let msg = std::ffi::CStr::from_bytes_until_nul(&buf).ok()?;
+    Some(msg.to_string_lossy().into_owned())
 }
 
 /// 远程调用 dlsym(handle, name)

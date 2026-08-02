@@ -49,6 +49,24 @@ prepare_injector() {
     echo "[injector-daemon] injector not executable: $TARGET_INJECTOR" >>"$TEERS_DIR/logs/injector.log"
     return 1
   fi
+
+  # 复制 payload 到稳定位置（/data/adb/Tee-rs/data/），避免因 Magisk 覆盖层
+  # 变更或 SELinux 阻止 keystore2 读取模块目录下的文件
+  STABLE_PAYLOAD="$STATE_DIR/injector.payload"
+  if [ "$TARGET_PAYLOAD" != "$STABLE_PAYLOAD" ]; then
+    cp -f "$TARGET_PAYLOAD" "$STABLE_PAYLOAD" 2>/dev/null || {
+      echo "[injector-daemon] 复制 payload 到 $STABLE_PAYLOAD 失败" >>"$TEERS_DIR/logs/injector.log"
+      # 不返回失败，仍然尝试用原路径
+    }
+  fi
+  chmod 0644 "$STABLE_PAYLOAD" 2>/dev/null || true
+  # 设置 SELinux 上下文为 keystore2 可读的类型
+  chcon u:object_r:keystore2_file:s0 "$STABLE_PAYLOAD" 2>/dev/null || \
+  chcon u:object_r:system_file:s0 "$STABLE_PAYLOAD" 2>/dev/null || true
+
+  # 优先使用稳定路径
+  TARGET_PAYLOAD="$STABLE_PAYLOAD"
+
   return 0
 }
 
@@ -80,14 +98,16 @@ is_injected() {
   [ -r "$maps" ] || return 1
 
   # 检查 payload 是否在 keystore2 的 maps 中
-  # 查多种路径格式：basename、完整路径、回退路径
+  # 查多种路径格式：basename、完整路径、稳定路径、回退路径
   if [ -n "$TARGET_PAYLOAD" ]; then
     local marker=$(basename "$TARGET_PAYLOAD")
     # 查 basename（如 "injector.payload"）
     grep -F "$marker" "$maps" >/dev/null 2>&1 && return 0
-    # 查完整路径
+    # 查完整路径（模块目录路径）
     grep -F "$TARGET_PAYLOAD" "$maps" >/dev/null 2>&1 && return 0
   fi
+  # 查稳定路径（/data/adb/Tee-rs/data/injector.payload）
+  grep -F "$STATE_DIR/injector.payload" "$maps" >/dev/null 2>&1 && return 0
   # 回退：查 /data/adb/Tee-rs/injector.payload（injector 自动模式的路径）
   grep -F "injector.payload" "$maps" >/dev/null 2>&1 && return 0
   return 1
@@ -149,12 +169,33 @@ while true; do
     fi
   fi
 
-  echo "[injector-daemon] injecting into keystore2 pid=$pid" >>"$TEERS_DIR/logs/injector.log"
+  echo "[injector-daemon] injecting into keystore2 pid=$pid payload=$TARGET_PAYLOAD" >>"$TEERS_DIR/logs/injector.log"
   "$TARGET_INJECTOR" "$pid" "$TARGET_PAYLOAD" "$TEERS_DIR/injector.toml" >>"$TEERS_DIR/logs/injector.log" 2>&1
   rc=$?
   last_attempt_pid=$pid
   retry_loop_counter=0
   pending_restart=0
   echo "[injector-daemon] injector exited with code $rc" >>"$TEERS_DIR/logs/injector.log"
+
+  # 注入成功后等待一会，让系统稳定
   sleep 3
+
+  # 验证注入是否成功（检查 maps 中是否有 payload）
+  if [ "$rc" -eq 0 ]; then
+    if is_injected "$pid"; then
+      echo "[injector-daemon] 注入验证成功，payload 已在 keystore2 pid=$pid 的 maps 中" >>"$TEERS_DIR/logs/injector.log"
+    else
+      echo "[injector-daemon] 警告：注入器返回成功但 payload 未在 maps 中检测到 pid=$pid" >>"$TEERS_DIR/logs/injector.log"
+      # 检查 payload 文件是否还存在
+      if [ -f "$TARGET_PAYLOAD" ]; then
+        echo "[injector-daemon] payload 文件存在: $TARGET_PAYLOAD" >>"$TEERS_DIR/logs/injector.log"
+      else
+        echo "[injector-daemon] payload 文件已丢失: $TARGET_PAYLOAD" >>"$TEERS_DIR/logs/injector.log"
+      fi
+      # 输出 keystore2 的部分 maps 用于调试
+      echo "[injector-daemon] --- keystore2 maps (含 payload 相关行) ---" >>"$TEERS_DIR/logs/injector.log"
+      grep -i "payload\|injector\|Tee-rs" /proc/$pid/maps 2>/dev/null >>"$TEERS_DIR/logs/injector.log" || echo "(无匹配)" >>"$TEERS_DIR/logs/injector.log"
+      echo "[injector-daemon] --- maps 结束 ---" >>"$TEERS_DIR/logs/injector.log"
+    fi
+  fi
 done
