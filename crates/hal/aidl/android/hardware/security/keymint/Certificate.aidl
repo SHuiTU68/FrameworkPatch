@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright 2020 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,11 +33,7 @@
 
 package android.hardware.security.keymint;
 /* @hide */
-@RustDerive(Clone=true, Eq=true, Hash=true, Ord=true, PartialEq=true, PartialOrd=true) @VintfStability
-parcelable KeyMintHardwareInfo {
-  int versionNumber;
-  android.hardware.security.keymint.SecurityLevel securityLevel = android.hardware.security.keymint.SecurityLevel.SOFTWARE;
-  @utf8InCpp String keyMintName;
-  @utf8InCpp String keyMintAuthorName;
-  boolean timestampTokenRequired;
+@VintfStability
+parcelable Certificate {
+  byte[] encodedCertificate;
 }

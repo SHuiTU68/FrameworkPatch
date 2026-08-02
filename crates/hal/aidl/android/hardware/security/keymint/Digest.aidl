@@ -33,11 +33,13 @@
 
 package android.hardware.security.keymint;
 /* @hide */
-@RustDerive(Clone=true, Eq=true, Hash=true, Ord=true, PartialEq=true, PartialOrd=true) @VintfStability
-parcelable KeyMintHardwareInfo {
-  int versionNumber;
-  android.hardware.security.keymint.SecurityLevel securityLevel = android.hardware.security.keymint.SecurityLevel.SOFTWARE;
-  @utf8InCpp String keyMintName;
-  @utf8InCpp String keyMintAuthorName;
-  boolean timestampTokenRequired;
+@Backing(type="int") @VintfStability
+enum Digest {
+  NONE = 0,
+  MD5 = 1,
+  SHA1 = 2,
+  SHA_2_224 = 3,
+  SHA_2_256 = 4,
+  SHA_2_384 = 5,
+  SHA_2_512 = 6,
 }

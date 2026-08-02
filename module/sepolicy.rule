@@ -1,4 +1,4 @@
-# ===== ptrace 注入路径（当前可用实现）所需规则 =====
+# ===== ptrace 注入路径（inject 模式，默认）所需规则 =====
 # keystore2 加载注入的 payload（system_file）执行
 allow keystore system_file file { execute getattr map read receive }
 # 崩溃时允许 attach 调试
@@ -6,16 +6,31 @@ allow crash_dump keystore process *
 # keystore2 查找 default_android_service（注入后内部 RPC 用）
 allow keystore default_android_service service_manager find
 
-# ===== KeyMint HAL 替换路径（方案 A，开发中，未启用）所需规则 =====
-# fktee-hal 注册为 keymint HAL service 并被 keystore2 调用。具体 source 域
-# 取决于启动方式：经 Magisk daemon 启动通常为 magisk 域；若以 init service
-# 启动则需自定义域。下列规则以 magisk 域为例，真机调试时按实际 ps -Z 输出调整。
+# ===== KeyMint HAL 替换路径（HAL 模式，方案 A）所需规则 =====
+# fktee-hal 由 Magisk service.sh 启动，进程域为 magisk（KernelSU/APatch 类似）。
+# 真机调试时用 `ps -Z | grep fktee-hal` 确认实际域，若非 magisk 需补充对应规则。
 #
-# 允许 HAL 进程向 servicemanager 注册/查找 service
+# 1. HAL 进程向 servicemanager 注册 / 查找 service
 allow magisk default_android_service service_manager { add find }
-# 允许 keystore2 查找并调用我们注册的 keymint HAL（default_android_service）
+# 2. keystore2 查找并调用我们注册的 keymint HAL（default_android_service）
 allow keystore default_android_service service_manager { find }
-# 允许 keystore2 与 HAL 进程经 binder 通信
+# 3. keystore2 ↔ HAL 进程经 binder 双向通信
 allow keystore magisk binder { call transfer }
-# 允许 HAL 进程被 binder 调用
 allow magisk keystore binder { call transfer }
+# 4. HAL 进程查找真 HAL（fktee-real 实例）转发非 attestation 事务
+allow magisk default_android_service service_manager find
+allow magisk hal_keymint_server binder { call transfer }
+allow hal_keymint_server magisk binder { call transfer }
+allow magisk hal_keymint_default binder { call transfer }
+allow hal_keymint_default magisk binder { call transfer }
+# 5. HAL 进程读取配置 / keybox / 黑名单（/data/adb/Tee-rs/）
+#    /data/adb/* 在 Magisk 下标记为 magisk_file
+allow magisk magisk_file file { read open getattr }
+allow magisk magisk_file dir { read search }
+# 6. HAL 进程读取 /data/system/packages.list（caller UID → 包名映射）
+#    packages.list 标记为 system_data_file
+allow magisk system_data_file file { read open getattr }
+allow magisk system_data_file dir { search }
+# 7. HAL 进程写入日志（/data/adb/Tee-rs/logs/）
+allow magisk magisk_file file { write create append }
+allow magisk magisk_file dir { write add_name }

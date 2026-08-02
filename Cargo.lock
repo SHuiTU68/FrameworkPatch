@@ -438,10 +438,16 @@ dependencies = [
 name = "fktee-hal"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "certgen",
  "env_logger",
  "log",
+ "once_cell",
+ "parking_lot",
  "rsbinder",
  "rsbinder-aidl",
+ "serde",
+ "toml",
 ]
 
 [[package]]

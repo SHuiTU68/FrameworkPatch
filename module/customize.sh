@@ -73,6 +73,7 @@ copy_default() {
 
 copy_default config.toml    config.toml
 copy_default injector.toml  injector.toml
+copy_default hal.toml       hal.toml
 copy_default keybox.xml     keybox.xml
 copy_default deny.list      deny.list
 copy_default props.conf     props.conf

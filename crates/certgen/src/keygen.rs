@@ -37,6 +37,17 @@ impl KeyPair {
         })
     }
 
+    /// 从已有 PKCS#8 私钥 + 预计算 SPKI 构造（加载已生成密钥，不重新生成）。
+    ///
+    /// HAL generation 模式：keyBlob 解包后用此方法恢复 KeyPair 用于 finish 签名。
+    pub fn from_pkcs8_and_spki(pkcs8: Vec<u8>, public_spki: Vec<u8>, alg: KeyAlgorithm) -> Self {
+        Self {
+            alg,
+            pkcs8,
+            public_spki,
+        }
+    }
+
     /// 算法。
     pub fn algorithm(&self) -> KeyAlgorithm {
         self.alg
@@ -90,7 +101,7 @@ pub(crate) fn generate_pkcs8(alg: KeyAlgorithm) -> Result<Vec<u8>> {
 // ===================== SPKI 提取 =====================
 
 /// 从 PKCS#8 私钥派生 SubjectPublicKeyInfo DER。
-pub(crate) fn spki_from_pkcs8(pkcs8: &[u8]) -> Result<Vec<u8>> {
+pub fn spki_from_pkcs8(pkcs8: &[u8]) -> Result<Vec<u8>> {
     use pkcs8::der::Decode;
     let info = pkcs8::PrivateKeyInfo::from_der(pkcs8).context("解析 PKCS#8 失败")?;
     let alg_oid = info.algorithm.oid;

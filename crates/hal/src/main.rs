@@ -1,92 +1,396 @@
-//! fktee-hal — KeyMint HAL 替换骨架（方案 A：binder 层代理，不注入进程）。
+//! fktee-hal — KeyMint HAL 替换实现（方案 A：binder 层代理，不注入进程）。
 //!
-//! # 架构目标
-//!
-//! 与 ptrace 注入不同，本 crate 把自己注册成 KeyMint HAL service，让
-//! keystore2 主动路由过来：
+//! # 架构
 //!
 //! ```text
-//! App → keystore2 → binder → [我们的 HAL] ─┬─ attestKey: 用 keybox 伪造证书链
-//!                                            └─ 其余事务: 透传给真 HAL
+//! App → keystore2 → binder → [fktee-hal] ─┬─ generateKey/importKey + attestation:
+//!                                            generation 模式：软件生成完整虚拟密钥
+//!                                            （keyBlob + 证书链公钥一致），begin/finish
+//!                                            用软件密钥签名。参考 TEESimulator `!`。
+//!                                          └─ 其余事务: 透传真 HAL
 //! ```
 //!
-//! 这样**不碰任何目标进程内存**——无 TracerPid、无 dlopen、无 PLT 修改痕迹。
-//! 检测面从“进程被注入”降到“多一个 binder service”（可借 SELinux/hideproc 收窄）。
+//! 不碰任何目标进程内存——无 TracerPid、无 dlopen、无 PLT 修改痕迹。
 //!
-//! # 实现路径（代理转发，非全量实现）
+//! # 部署前提
 //!
-//! KeyMint 是 `@VintfStability` 接口，不能部分实现——对 generateKey/begin 返回
-//! 错误会瘫痪整个 keystore2。因此走“代理 + 选择性拦截”：
-//!   1. 设备真 HAL 的 vintf manifest 实例名形如
-//!      `android.hardware.security.keymint.IKeyMintDevice/<vendor>`
-//!      （vendor 段因 SoC 而异：default / strongbox / keymint-service.* ）。
-//!   2. 开机时把真 HAL 改名（vintf manifest 重写 / setprop），或先查到它再
-//!      以别名注册。
-//!   3. 我们注册成 `.../default`，拿到 keystore2 的全部调用。
-//!   4. 非 attestation 事务转发给真 HAL（按别名 wait_for_interface）。
-//!   5. 仅 `attestKey`（及 `convertStorageKeyToEphemeral` 等涉证方法）用本模块
-//!      keybox 经 certgen 签发伪造证书链返回。
-//!   6. 黑名单豁免：binder 调用自带 caller UID/PID，反查 packages.list 命中
-//!      deny.list 则直通真 HAL（不伪造）。
+//! 1. vintf manifest 把真 HAL 实例名改为 `fktee-real`（或 hal.toml 配置的
+//!    `real_hal_instance`），让 `default` 实例空出。
+//! 2. fktee-hal 抢注 `default`，keystore2 通过 getSecurityLevelService 路由过来。
+//! 3. sepolicy.rule 放行 HAL 注册 / binder 调用。
+//! 4. service.sh 在 late_start 启动 fktee-hal。
 //!
-//! # 当前状态：骨架
+//! # 伪造模式（参考 TEESimulator）
 //!
-//! 本文件只实现 service 注册样板 + getHardwareInfo，**不接进开机启动**（见
-//! service.sh 注释）。可用前提：
-//!   - aidl/ 下替换为 AOSP 冻结快照（带 VintfStability 版本/hash）；
-//!   - build.rs 补 .version().hash()；
-//!   - 实现完整接口（代理转发 + attestation 拦截）；
-//!   - sepolicy.rule 放开 HAL 注册/查找权限（见 module/sepolicy.rule）；
-//!   - 模块开机脚本启动本 service。
-//!
-//! 上述未完成前，ptrace 注入路径仍是唯一可用实现，保持不变。
-//!
-//! # 本地验证（不刷机）
-//!
-//! `cargo check -p fktee-hal` 跑 build.rs 验证 AIDL 能编译成 Rust 绑定。
-//! 真机路由验证：手动 `fktee-hal` 起来后 `service list | grep keymint` 应能看到
-//! 我们的实例（仅骨架，keystore2 因版本协商会拒绝，属预期）。
+//! - `generation`（默认）：软件生成完整虚拟密钥，keyBlob 与 leaf 公钥一致，
+//!   begin/finish 用软件密钥签名。彻底，通过公钥一致性检测。
+//! - `leaf_hack`：透传真 HAL keyBlob，仅替换证书链。leaf 公钥 ≠ keyBlob 公钥，
+//!   高级检测会失败。
 
-// build.rs 生成：OUT_DIR/keymint.rs（在 crate 根定义 pub mod android {...}）
+// build.rs 生成：OUT_DIR/keymint.rs
 rsbinder::include_aidl!("keymint");
 
+mod caller;
+mod config;
+mod intercept;
+mod keystore;
+mod operation;
+mod proxy;
+
+use std::sync::Arc;
+
 use rsbinder::hub;
-use rsbinder::ProcessState;
+use rsbinder::parcelable::Parcelable;
+use rsbinder::{get_calling_uid, ProcessState};
 
-use crate::android::hardware::security::keymint::IKeyMintDevice::BnKeyMintDevice;
-use crate::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
+use crate::android::hardware::security::keymint::IKeyMintDevice::{
+    BnKeyMintDevice, IKeyMintDevice,
+};
+use crate::android::hardware::security::keymint::KeyCreationResult::KeyCreationResult;
 use crate::android::hardware::security::keymint::KeyMintHardwareInfo::KeyMintHardwareInfo;
+use crate::android::hardware::security::keymint::KeyParameter::KeyParameter;
+use crate::android::hardware::security::keymint::BeginResult::BeginResult;
+use crate::android::hardware::security::secureclock::TimeStampToken::TimeStampToken;
 
-/// 占位 HAL 实现。仅 getHardwareInfo 返回固定值，其余方法待补。
-struct KeyMintSkeleton;
+use crate::config::{ForgeMode, HalConfig};
+use crate::intercept::{forge_certificate_chain, forge_key_generation, parse_attestation_request};
+use certgen::DeviceInfo;
 
-impl rsbinder::Interface for KeyMintSkeleton {}
+/// KeyMint HAL 代理实现。
+///
+/// 持有运行时配置（hook 开关 / 黑名单 / 设备信息 / keybox 字节），
+/// 按 caller UID 反查包名决定是否伪造。真 HAL 句柄惰性查找并缓存
+/// （见 [`proxy`] 模块）。
+struct KeyMintProxy {
+    cfg: Arc<parking_lot::RwLock<HalConfig>>,
+    /// keybox.xml 字节（启动时一次读入，热重载见 [`KeyMintProxy::reload_keybox`]）。
+    keybox_xml: parking_lot::RwLock<Vec<u8>>,
+}
 
-impl IKeyMintDevice for KeyMintSkeleton {
+impl rsbinder::Interface for KeyMintProxy {}
+
+impl KeyMintProxy {
+    fn new(cfg: HalConfig) -> Self {
+        let keybox_path = cfg.keybox_path.clone();
+        let real_instance = cfg.real_hal_instance.clone();
+        let s = Self {
+            cfg: Arc::new(parking_lot::RwLock::new(cfg)),
+            keybox_xml: parking_lot::RwLock::new(load_keybox(&keybox_path)),
+        };
+        log::info!(
+            "fktee-hal: proxy ready (real_hal={real_instance}, keybox={} bytes)",
+            s.keybox_xml.read().len()
+        );
+        s
+    }
+
+    /// 重新加载 keybox + deny.list（收到 SIGHUP 或文件变更时调用）。
+    #[allow(dead_code)]
+    fn reload(&self) {
+        let kb_path = self.cfg.read().keybox_path.clone();
+        let mut c = self.cfg.write();
+        c.load_deny_list();
+        drop(c);
+        *self.keybox_xml.write() = load_keybox(&kb_path);
+        log::info!("fktee-hal: 配置热重载完成");
+    }
+
+    /// 判断当前 binder 调用方是否应被伪造。
+    /// `caller_pkg` 为调用方包名（用于日志和 ATTESTATION_APPLICATION_ID 兜底）。
+    fn should_forge(&self, caller_uid: u32, caller_pkg: &str) -> bool {
+        let cfg = self.cfg.read();
+        if !cfg.hook.enabled {
+            return false;
+        }
+        if cfg.hook.deny_packages.is_empty() {
+            return true;
+        }
+        // caller_pkg 已由 caller::packages_for_uid 解析；若为空（packages.list 不可读）
+        // 保守不豁免（继续伪造）——黑名单是可选安全网。
+        if caller_pkg.is_empty() {
+            return true;
+        }
+        let denied = cfg.hook.deny_packages.iter().any(|p| p == caller_pkg);
+        if denied {
+            log::debug!("fktee-hal: uid={caller_uid} pkg={caller_pkg} 命中黑名单，透传");
+        }
+        !denied
+    }
+
+    /// 取真 HAL 代理；失败返回 Unknown（generic binder error）。
+    fn real_hal(
+        &self,
+    ) -> rsbinder::BinderResult<&'static rsbinder::Strong<dyn IKeyMintDevice>> {
+        let instance = self.cfg.read().real_hal_instance.clone();
+        proxy::get_real_hal(&instance)
+            .ok_or_else(|| rsbinder::StatusCode::Unknown.into())
+    }
+
+    /// 构造 certgen DeviceInfo（从 hal.toml device 段 + 系统 prop 兜底）。
+    fn device_info(&self) -> DeviceInfo {
+        let c = self.cfg.read();
+        let d = &c.device;
+        DeviceInfo {
+            android_version: d.android_version,
+            os_version: d.os_version,
+            os_patch_level: d.os_patch_level,
+            vendor_patch_level: d.vendor_patch_level,
+            boot_patch_level: d.boot_patch_level,
+            keymaster_version: d.keymaster_version,
+            attestation_version: d.attestation_version,
+            security_level: d.security_level,
+            creation_datetime: 0, // certgen 用当前时间兜底
+            boot_key: Vec::new(), // certgen 用全零兜底
+            boot_hash: Vec::new(),
+        }
+    }
+
+    /// 处理 generateKey/importKey：含 attestation challenge 且未豁免时伪造证书链。
+    ///
+    /// 按 `forge_mode` 分发：
+    /// - `generation`：软件生成完整虚拟密钥（keyBlob + 证书链公钥一致）。失败
+    ///   时 fallback 到 leaf_hack，再失败透传真 HAL。
+    /// - `leaf_hack`：透传真 HAL keyBlob，仅替换证书链。
+    ///
+    /// 返回值：原样透传、证书链替换后、或软件生成的 KeyCreationResult。
+    fn handle_key_creation(
+        &self,
+        params: &[KeyParameter],
+        real: KeyCreationResult,
+    ) -> KeyCreationResult {
+        let uid = get_calling_uid();
+        let pkgs = caller::packages_for_uid(uid);
+        let caller_pkg = pkgs.first().cloned().unwrap_or_default();
+
+        if !self.should_forge(uid, &caller_pkg) {
+            return real;
+        }
+
+        let Some(req) = parse_attestation_request(params, &caller_pkg) else {
+            // 无 attestation challenge，原样透传真 HAL 结果
+            return real;
+        };
+
+        let keybox = self.keybox_xml.read().clone();
+        if keybox.is_empty() {
+            log::warn!("fktee-hal: keybox 为空，无法伪造，透传真 HAL 证书链");
+            return real;
+        }
+
+        let device = self.device_info();
+        let mode = self.cfg.read().hook.forge_mode.resolved();
+
+        match mode {
+            ForgeMode::Generation => {
+                // generation 模式：软件生成完整虚拟密钥。失败 fallback leaf_hack。
+                match forge_key_generation(params, &req, &keybox, &device) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        log::warn!(
+                            "fktee-hal: generation 失败，fallback leaf_hack: {e:?}"
+                        );
+                        forge_certificate_chain(real, &req, &keybox, &device)
+                    }
+                }
+            }
+            ForgeMode::LeafHack => forge_certificate_chain(real, &req, &keybox, &device),
+            ForgeMode::Auto => {
+                // resolved() 已把 Auto → Generation，这里不可达。
+                forge_certificate_chain(real, &req, &keybox, &device)
+            }
+        }
+    }
+}
+
+impl IKeyMintDevice for KeyMintProxy {
     fn r#getHardwareInfo(&self) -> rsbinder::BinderResult<KeyMintHardwareInfo> {
-        // 占位值。真实实现应报 KeyMint 4.0（version=400）以匹配现代 keystore2。
-        Ok(KeyMintHardwareInfo {
-            keyMintVersion: 400,
-            keyMintSecurityLevel: 0, // TRUSTED_ENVIRONMENT
-            isHwAttestationSupported: true,
-        })
+        // 透传真 HAL（保留真实版本号 / 安全级别），keystore2 据此选择实例。
+        // 不需要伪造——硬件信息不暴露 attestation。
+        self.real_hal()?.r#getHardwareInfo()
+    }
+
+    fn r#addRngEntropy(&self, data: &[u8]) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#addRngEntropy(data)
+    }
+
+    fn r#generateKey(
+        &self,
+        key_params: &[KeyParameter],
+        attestation_key: Option<&crate::android::hardware::security::keymint::AttestationKey::AttestationKey>,
+    ) -> rsbinder::BinderResult<KeyCreationResult> {
+        let real = self.real_hal()?.r#generateKey(key_params, attestation_key)?;
+        Ok(self.handle_key_creation(key_params, real))
+    }
+
+    fn r#importKey(
+        &self,
+        key_params: &[KeyParameter],
+        key_format: crate::android::hardware::security::keymint::KeyFormat::KeyFormat,
+        key_data: &[u8],
+        attestation_key: Option<&crate::android::hardware::security::keymint::AttestationKey::AttestationKey>,
+    ) -> rsbinder::BinderResult<KeyCreationResult> {
+        let real = self
+            .real_hal()?
+            .r#importKey(key_params, key_format, key_data, attestation_key)?;
+        Ok(self.handle_key_creation(key_params, real))
+    }
+
+    fn r#importWrappedKey(
+        &self,
+        wrapped_key_data: &[u8],
+        wrapping_key_blob: &[u8],
+        masking_key: &[u8],
+        unwrapping_params: &[KeyParameter],
+        password_sid: i64,
+        biometric_sid: i64,
+    ) -> rsbinder::BinderResult<KeyCreationResult> {
+        // importWrappedKey 一般不触发 attestation（wrapped key 自带证书链），
+        // 但仍走 handle_key_creation 以防万一。
+        let real = self.real_hal()?.r#importWrappedKey(
+            wrapped_key_data,
+            wrapping_key_blob,
+            masking_key,
+            unwrapping_params,
+            password_sid,
+            biometric_sid,
+        )?;
+        Ok(self.handle_key_creation(unwrapping_params, real))
+    }
+
+    fn r#upgradeKey(
+        &self,
+        key_blob_to_upgrade: &[u8],
+        upgrade_params: &[KeyParameter],
+    ) -> rsbinder::BinderResult<Vec<u8>> {
+        // 软件 keyBlob 无需升级（不绑定 OS 版本），原样返回。
+        if keystore::is_software_blob(key_blob_to_upgrade) {
+            return Ok(key_blob_to_upgrade.to_vec());
+        }
+        self.real_hal()?.r#upgradeKey(key_blob_to_upgrade, upgrade_params)
+    }
+
+    fn r#deleteAllKeys(&self) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#deleteAllKeys()
+    }
+
+    fn r#destroyAttestationIds(&self) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#destroyAttestationIds()
+    }
+
+    fn r#begin(
+        &self,
+        purpose: crate::android::hardware::security::keymint::KeyPurpose::KeyPurpose,
+        key_blob: &[u8],
+        params: &[KeyParameter],
+        auth_token: Option<&crate::android::hardware::security::keymint::HardwareAuthToken::HardwareAuthToken>,
+    ) -> rsbinder::BinderResult<BeginResult>
+    {
+        // generation 模式：软件 keyBlob 不回调真 HAL，直接构造 SoftwareOperation。
+        if keystore::is_software_blob(key_blob) {
+            let kp = keystore::load(key_blob).ok_or_else(|| {
+                log::warn!("fktee-hal: 软件 keyBlob 加载失败（可能进程重启后失效）");
+                rsbinder::Status::from(rsbinder::StatusCode::BadValue)
+            })?;
+            let op = operation::SoftwareOperation::new(kp);
+            log::debug!(
+                "fktee-hal: begin 软件 keyBlob ({}B) → SoftwareOperation",
+                key_blob.len()
+            );
+            return Ok(BeginResult {
+                r#challenge: 0,
+                r#params: params.to_vec(),
+                r#operation: Some(op.into_strong()),
+            });
+        }
+        // 真硬件 keyBlob：透传真 HAL
+        self.real_hal()?.r#begin(purpose, key_blob, params, auth_token)
+    }
+
+    fn r#deleteKey(&self, key_blob: &[u8]) -> rsbinder::BinderResult<()> {
+        // 软件 keyBlob：从内存表移除；真 keyBlob：透传真 HAL。
+        if keystore::is_software_blob(key_blob) {
+            keystore::remove(key_blob);
+            return Ok(());
+        }
+        self.real_hal()?.r#deleteKey(key_blob)
+    }
+
+    fn r#deviceLocked(
+        &self,
+        password_only: bool,
+        timestamp_token: Option<&TimeStampToken>,
+    ) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#deviceLocked(password_only, timestamp_token)
+    }
+
+    fn r#earlyBootEnded(&self) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#earlyBootEnded()
+    }
+
+    fn r#convertStorageKeyToEphemeral(&self, storage_key_blob: &[u8]) -> rsbinder::BinderResult<Vec<u8>> {
+        self.real_hal()?.r#convertStorageKeyToEphemeral(storage_key_blob)
+    }
+
+    fn r#getKeyCharacteristics(
+        &self,
+        key_blob: &[u8],
+        app_id: &[u8],
+        app_data: &[u8],
+    ) -> rsbinder::BinderResult<Vec<crate::android::hardware::security::keymint::KeyCharacteristics::KeyCharacteristics>>
+    {
+        // 软件 keyBlob：keystore2 正常路径下不会调到这里（characteristics 已在
+        // generateKey 返回时缓存）；若被调到，返回空（保守）。
+        if keystore::is_software_blob(key_blob) {
+            return Ok(Vec::new());
+        }
+        self.real_hal()?.r#getKeyCharacteristics(key_blob, app_id, app_data)
+    }
+
+    fn r#getRootOfTrustChallenge(&self) -> rsbinder::BinderResult<[u8; 16]> {
+        self.real_hal()?.r#getRootOfTrustChallenge()
+    }
+
+    fn r#getRootOfTrust(&self, challenge: &[u8; 16]) -> rsbinder::BinderResult<Vec<u8>> {
+        self.real_hal()?.r#getRootOfTrust(challenge)
+    }
+
+    fn r#sendRootOfTrust(&self, root_of_trust: &[u8]) -> rsbinder::BinderResult<()> {
+        self.real_hal()?.r#sendRootOfTrust(root_of_trust)
+    }
+}
+
+/// 读取 keybox.xml 字节。文件缺失返回空 Vec（调用方走透传兜底）。
+fn load_keybox(path: &std::path::Path) -> Vec<u8> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            log::info!("fktee-hal: keybox 加载 {} 字节", bytes.len());
+            bytes
+        }
+        Err(e) => {
+            log::warn!("fktee-hal: keybox 读取失败 ({}): {e}", path.display());
+            Vec::new()
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    log::info!("fktee-hal: starting KeyMint HAL skeleton (NOT functional)");
+    log::info!("fktee-hal: starting KeyMint HAL proxy (方案 A)");
 
-    // 初始化 binder 进程状态（kernel binder 路径，关闭默认 async feature）。
+    // 配置：/data/adb/Tee-rs/hal.toml（缺失走默认）。
+    let cfg_path = std::path::Path::new("/data/adb/Tee-rs/hal.toml");
+    let mut cfg = HalConfig::load(cfg_path);
+    cfg.load_deny_list();
+
+    // 初始化 binder 进程状态。
     ProcessState::init_default()?;
     ProcessState::start_thread_pool();
 
-    // 注册为 default 实例。keystore2 通过 getSecurityLevelService(TRUSTED_ENVIRONMENT)
-    // 查找 `android.hardware.security.keymint.IKeyMintDevice/default`。
-    //
-    // 注意：真机上此注册需要 SELinux 放行（见 sepolicy.rule）且与真 HAL 抢
-    // default 实例名——必须先把真 HAL 改名，否则 add_service 会因实例已存在失败。
-    let service = BnKeyMintDevice::new_binder(KeyMintSkeleton);
+    let proxy = KeyMintProxy::new(cfg);
+
+    // 注册为 default 实例。真 HAL 必须已被 vintf manifest 改名为 real_hal_instance，
+    // 否则 add_service 会因 default 已占用失败。
+    let service = BnKeyMintDevice::new_binder(proxy);
     hub::add_service(
         "android.hardware.security.keymint.IKeyMintDevice/default",
         service.as_binder(),
@@ -98,3 +402,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+// 静默引入 Parcelable trait 以避免 unused import 警告（KeyCreationResult 等结构体
+// 在 forge_certificate_chain 中按字段构造，未直接调用 Parcelable 方法，但 trait
+// 必须在作用域内以使用其实现的 Default）。
+#[allow(dead_code)]
+fn _ensure_parcelable_in_scope<T: Parcelable>(_: &T) {}
+
+// 编译期断言：TimeStampToken 在作用域（用于 deviceLocked 签名）。
+#[allow(dead_code)]
+const _: fn() = || {
+    let _: TimeStampToken;
+};

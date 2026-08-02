@@ -353,7 +353,7 @@ mod der {
 pub use attestation::{build_attestation_extension, AttestationConfig, DeviceInfo};
 pub use certbuilder::{build_attested_chain, build_self_signed, CertChainResult};
 pub use keybox::{KeyAlgorithm, Keybox, KeyboxData};
-pub use keygen::KeyPair;
+pub use keygen::{spki_from_pkcs8, KeyPair};
 
 /// 证书生成器门面（facade）。
 ///

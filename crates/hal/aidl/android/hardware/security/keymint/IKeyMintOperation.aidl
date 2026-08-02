@@ -33,11 +33,10 @@
 
 package android.hardware.security.keymint;
 /* @hide */
-@RustDerive(Clone=true, Eq=true, Hash=true, Ord=true, PartialEq=true, PartialOrd=true) @VintfStability
-parcelable KeyMintHardwareInfo {
-  int versionNumber;
-  android.hardware.security.keymint.SecurityLevel securityLevel = android.hardware.security.keymint.SecurityLevel.SOFTWARE;
-  @utf8InCpp String keyMintName;
-  @utf8InCpp String keyMintAuthorName;
-  boolean timestampTokenRequired;
+@SensitiveData @VintfStability
+interface IKeyMintOperation {
+  void updateAad(in byte[] input, in @nullable android.hardware.security.keymint.HardwareAuthToken authToken, in @nullable android.hardware.security.secureclock.TimeStampToken timeStampToken);
+  byte[] update(in byte[] input, in @nullable android.hardware.security.keymint.HardwareAuthToken authToken, in @nullable android.hardware.security.secureclock.TimeStampToken timeStampToken);
+  byte[] finish(in @nullable byte[] input, in @nullable byte[] signature, in @nullable android.hardware.security.keymint.HardwareAuthToken authToken, in @nullable android.hardware.security.secureclock.TimeStampToken timestampToken, in @nullable byte[] confirmationToken);
+  void abort();
 }
