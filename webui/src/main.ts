@@ -1,187 +1,148 @@
-// FKTee-rs KSU WebUI 主入口
-import '@material/web/all.js';
-import { fullScreen, toast } from 'kernelsu-alt';
-import { renderGlobal } from './global';
-import { renderKeybox } from './keybox';
-import { renderStatus } from './status';
-import { renderDeny } from './deny';
-import { renderUsb } from './usb';
-import { renderProps } from './props';
+// FKTee-rs WebUI 主入口
+import '@material/web/all'
+import type { MdOutlinedTextField, MdDialog, MdFab, MdIconButton } from '@material/web/all'
+import { i18n } from './i18n'
+import { MainMenu } from './main_menu/main_menu'
+import { Cli } from './cli'
+import { FkteeConfig } from './config_fktee'
+import { AppList } from './app_list/app_list'
+import { Snackbar } from './snackbar/snackbar'
+import { FileSelector } from './file_selector/file_selector'
+import { History } from './history'
+import { Keybox } from './keybox/keybox'
+import { DialogController } from './dialog/dialog'
+import { SearchBar } from './search_bar/search_bar'
+import { Keybind } from './keybind'
+import './style.scss'
 
-type Tab = 'global' | 'keybox' | 'deny' | 'props' | 'usb' | 'status';
+await i18n.init()
 
-const app = document.getElementById('app')!;
-let currentTab: Tab = 'global';
+const snackbar = new Snackbar()
+const fileSelector = new FileSelector()
+const cli = new Cli()
+const history = new History()
+const keybind = new Keybind()
+const config = new FkteeConfig()
 
-// 检查 WebView 版本 >= 120
-function checkWebViewVersion(): boolean {
-  const m = navigator.userAgent.match(/Chrome\/(\d+)/);
-  const ver = m ? parseInt(m[1], 10) : 0;
-  if (ver && ver < 120) {
-    try {
-      toast(`WebView 版本过低 (${ver})，建议升级至 120+`);
-    } catch {
-      /* ignore */
-    }
-    console.warn(`WebView version ${ver} < 120`);
-    return false;
-  }
-  return true;
-}
-
-// 全局 MD3 样式
-const STYLE = `
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined&family=Roboto:wght@400;500;700&display=swap" />
-<style>
-:root {
-  --md-sys-color-primary: #4f60bc;
-  --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-primary-container: #dde0ff;
-  --md-sys-color-on-primary-container: #00164e;
-  --md-sys-color-surface: #fefcff;
-  --md-sys-color-on-surface: #1b1b1f;
-  --md-sys-color-surface-variant: #e3e1ec;
-  --md-sys-color-on-surface-variant: #46464f;
-  --md-sys-color-outline: #777680;
-  --md-sys-color-secondary-container: #e1e0f9;
-  --md-sys-color-error: #ba1a1a;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-error-container: #ffdad6;
-  --md-sys-color-outline-variant: #c7c5d0;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --md-sys-color-primary: #bbc3ff;
-    --md-sys-color-on-primary: #212a60;
-    --md-sys-color-primary-container: #384278;
-    --md-sys-color-on-primary-container: #dde0ff;
-    --md-sys-color-surface: #131318;
-    --md-sys-color-on-surface: #e5e1e9;
-    --md-sys-color-surface-variant: #46464f;
-    --md-sys-color-on-surface-variant: #c7c5d0;
-    --md-sys-color-outline: #90909a;
-    --md-sys-color-secondary-container: #3a3a4c;
-    --md-sys-color-error: #ffb4ab;
-    --md-sys-color-on-error: #690005;
-    --md-sys-color-error-container: #93000a;
-    --md-sys-color-outline-variant: #46464f;
-    color-scheme: dark;
-  }
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body {
-  font-family: 'Roboto', system-ui, sans-serif;
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-on-surface);
-  min-height: 100vh;
-}
-.material-symbols-outlined { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; line-height: 1; }
-#app { max-width: 760px; margin: 0 auto; padding: 16px; }
-.appbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.appbar h1 { font-size: 22px; margin: 0; flex: 1; }
-.appbar .logo { width: 36px; height: 36px; border-radius: 10px; background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); display: flex; align-items: center; justify-content: center; font-weight: 700; }
-.subtitle { color: var(--md-sys-color-on-surface-variant); font-size: 13px; margin: 0 0 12px; }
-.tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.tabs md-text-button, .tabs md-filled-tonal-button { flex: 1; min-width: 96px; }
-#content { display: block; }
-.section-title { font-size: 16px; margin: 18px 0 10px; color: var(--md-sys-color-on-surface-variant); }
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar md-outlined-text-field { flex: 1; }
-.counter { font-size: 13px; color: var(--md-sys-color-on-surface-variant); white-space: nowrap; }
-.cards { display: flex; flex-direction: column; gap: 8px; }
-.card {
-  display: flex; align-items: center; gap: 12px;
-  background: var(--md-sys-color-secondary-container);
-  border-radius: 16px; padding: 10px 14px; cursor: pointer;
-  border: 2px solid transparent; transition: border-color .15s;
-}
-.card.selected { border-color: var(--md-sys-color-primary); }
-.card-body { flex: 1; min-width: 0; }
-.card-title { font-weight: 500; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-sub { font-size: 12px; color: var(--md-sys-color-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-meta { font-size: 11px; color: var(--md-sys-color-outline); margin-top: 2px; }
-.info-card { background: var(--md-sys-color-secondary-container); border-radius: 16px; padding: 14px 16px; }
-.info-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); font-size: 14px; }
-.info-row:last-child { border-bottom: none; }
-.info-row .ok { color: #2e7d32; }
-.info-row .warn { color: var(--md-sys-color-error); }
-.mono { font-family: ui-monospace, monospace; font-size: 12px; }
-.actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
-.tip { font-size: 12px; color: var(--md-sys-color-outline); }
-.hint { padding: 24px; text-align: center; color: var(--md-sys-color-on-surface-variant); }
-.hint.error { color: var(--md-sys-color-error); }
-.mode-pkg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 8px; }
-code { background: var(--md-sys-color-surface-variant); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-md-checkbox { flex: none; }
-.prop-card { padding: 8px 10px; }
-.prop-card .prop-body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.prop-card md-outlined-text-field { width: 100%; }
-.prop-card .prop-del { flex: none; }
-</style>
-`;
-
-// 顶部外壳
-function shell(): string {
-  const tabBtn = (id: Tab, label: string) =>
-    currentTab === id
-      ? `<md-filled-tonal-button data-tab="${id}">${label}</md-filled-tonal-button>`
-      : `<md-text-button data-tab="${id}">${label}</md-text-button>`;
-  return `
-    ${STYLE}
-    <div class="appbar">
-      <div class="logo">F</div>
-      <h1>FKTee-rs</h1>
+document.querySelector<HTMLDivElement>('#app')!.innerHTML = /* html */ `
+  <section class="header">
+    <div id="title" class="search-hide">
+      <div class="title-main">${i18n.t('header_title')}</div>
+      <div class="title-sub">${i18n.t('header_subtitle')}</div>
     </div>
-    <p class="subtitle">Play Integrity 全局密钥链 Hook · KernelSU WebUI</p>
-    <div class="tabs">
-      ${tabBtn('global', '全局')}
-      ${tabBtn('keybox', 'Keybox')}
-      ${tabBtn('deny', '黑名单')}
-      ${tabBtn('props', '属性')}
-      ${tabBtn('usb', 'USB')}
-      ${tabBtn('status', '状态')}
+    <div class="spacer"></div>
+    <md-icon-button id="search-button" class="search-hide"><md-icon>search</md-icon></md-icon-button>
+    <md-outlined-text-field class="search-bar hide">
+      <md-icon-button slot="trailing-icon" id="search-close"><md-icon>close</md-icon></md-icon-button>
+    </md-outlined-text-field>
+    <div class="main-menu">
+      <md-icon-button id="menu-button">
+        <md-icon>more_vert</md-icon>
+      </md-icon-button>
     </div>
-    <div id="content"></div>
-  `;
-}
+  </section>
 
-// 切换标签
-function switchTab(tab: Tab): void {
-  if (tab === currentTab) return;
-  currentTab = tab;
-  render();
-}
+  <section class="body-content">
+    <div class="deny-hint">${i18n.t('app_list_deny_hint')}</div>
+    <div class="app-list">
+      <div class="loading"><md-circular-progress indeterminate></md-circular-progress></div>
+    </div>
+    <div class="bottom-safe-inset"></div>
+  </section>
 
-// 渲染当前标签内容
-function renderContent(): void {
-  const content = document.getElementById('content')!;
-  if (currentTab === 'global') renderGlobal(content);
-  else if (currentTab === 'keybox') renderKeybox(content);
-  else if (currentTab === 'deny') renderDeny(content);
-  else if (currentTab === 'props') renderProps(content);
-  else if (currentTab === 'usb') renderUsb(content);
-  else renderStatus(content);
-}
+  <section class="floating-content fab-hide">
+    ${snackbar.html()}
+    <div class="fab-container">
+      <md-fab variant="primary" class="fab fab-hide" id="save" label="${i18n.t('functional_button_save')}">
+        <md-icon slot="icon">edit_note</md-icon>
+      </md-fab>
+    </div>
+  </section>
 
-function render(): void {
-  app.innerHTML = shell();
-  app.querySelectorAll<HTMLElement>('[data-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab as Tab));
-  });
-  renderContent();
-}
+  <section class="dialog-content"></section>
+`
 
-// 启动
-function boot(): void {
-  checkWebViewVersion();
+// 应用列表
+const appList = new AppList(config)
+await config.read()
+await appList.fetch()
+appList.syncSystemAppsWithConfig()
+const appListContainer = document.querySelector<HTMLElement>('.app-list')!
+appList.renderAppList(appListContainer)
+float(false)
+
+// 搜索栏
+const searchBar = new SearchBar(history)
+const searchBarEl = document.querySelector<MdOutlinedTextField>('.search-bar')!
+const searchHide = document.querySelectorAll<HTMLElement>('.search-hide')
+const searchButton = document.getElementById('search-button') as MdIconButton
+searchBar.init(searchBarEl, searchHide, appListContainer)
+searchButton.onclick = () => searchBar.show()
+
+// 保存黑名单
+const saveFab = document.getElementById('save') as MdFab
+saveFab.onclick = () => saveDeny()
+async function saveDeny(): Promise<void> {
   try {
-    fullScreen(true);
+    await appList.save()
+    await appList.refresh()
+    snackbar.show(i18n.t('prompt_saved_target'))
   } catch {
-    /* 非 KSU 环境忽略 */
+    snackbar.show(i18n.t('prompt_save_error'), false)
   }
-  render();
 }
 
-boot();
+// 浮动元素显隐
+function float(hide: boolean): void {
+  document.querySelectorAll('.floating-content, .fab').forEach(el => el.classList.toggle('fab-hide', hide))
+}
+
+// 菜单事件
+const mainMenu = new MainMenu()
+const keybox = new Keybox(cli, config, fileSelector, snackbar)
+const mainMenuContainer = document.querySelector<HTMLElement>('.main-menu')!
+mainMenu.appendTo(mainMenuContainer)
+mainMenu.on('menu-open', () => appList.menuOpen = true)
+mainMenu.on('menu-close', () => appList.menuOpen = false)
+mainMenu.on('menu-refresh', async () => await appList.refresh())
+mainMenu.on('menu-select-all', () => appList.selectAll())
+mainMenu.on('menu-deselect-all', () => appList.deselectAll())
+mainMenu.on('menu-add-system-app', () => dialogController.showSystemApp())
+mainMenu.on('menu-keybox-local', async () => await keybox.setLocalKey())
+mainMenu.on('menu-keybox-paste', () => keybox.showPasteDialog())
+mainMenu.on('menu-prop-setting', () => dialogController.showProp())
+mainMenu.on('menu-config', () => dialogController.showConfig())
+mainMenu.on('menu-hal', () => dialogController.showHal())
+mainMenu.on('menu-usb', () => dialogController.showUsb())
+mainMenu.on('menu-status', () => dialogController.showStatus())
+mainMenu.on('menu-restart', () => dialogController.showRestart())
+mainMenu.on('menu-help', () => dialogController.showHelp())
+mainMenu.on('menu-about', () => dialogController.showAbout())
+
+// 快捷键
+keybind.on('keybind-select-all', () => appList.selectAll())
+keybind.on('keybind-deselect-all', () => appList.deselectAll())
+keybind.on('keybind-search', () => searchBar.show())
+keybind.on('keybind-save', () => saveDeny())
+keybind.on('keybind-esc', () => history.back())
+
+// 对话框
+const dialogController = new DialogController(cli, config, snackbar, appList)
+const dialogContent = document.querySelector<HTMLElement>('.dialog-content')!
+fileSelector.appendTo(dialogContent)
+keybox.appendTo(dialogContent)
+dialogController.appendAll(dialogContent)
+dialogContent.querySelectorAll<MdDialog>('md-dialog').forEach((dialog, i) => {
+  const id = dialog.id || `md-dialog-${i}`
+  dialog.addEventListener('open', () => history.push(id, () => dialog.close()))
+  dialog.addEventListener('closed', () => history.consume(id))
+})
+
+// 滚动时收起 FAB / 菜单
+let lastScrollY = window.scrollY
+window.onscroll = () => {
+  document.querySelectorAll('md-menu').forEach(menu => menu.close())
+  float(window.scrollY > lastScrollY && window.scrollY > 48)
+  document.querySelector('.header')?.classList.toggle('scroll', window.scrollY > 10)
+  lastScrollY = window.scrollY
+}

@@ -59,7 +59,9 @@ start_inject() {
     ks=$(get_keystore_pid)
     [ -n "$ks" ] || return 1
     rm -f "$PIDFILE"
-    "$BIN" "$ks" "$PAYLOAD" "$CONFIG" &
+    # inject 输出重定向到日志，便于排查 ptrace attach / SELinux 拒绝等失败。
+    # 之前直接后台运行导致 stderr 进 /dev/null，injector 一直静默失败无从排查。
+    nohup "$BIN" "$ks" "$PAYLOAD" "$CONFIG" >>"$TEERS_DIR/logs/injector.log" 2>&1 &
     echo $! > "$PIDFILE"
 }
 

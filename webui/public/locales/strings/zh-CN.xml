@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="system_default">系统默认</string>
+    <!-- Header -->
+    <string name="header_title">FKTee-rs</string>
+    <string name="header_subtitle">Keystore2 证书链 Hook</string>
+    <!-- Search -->
+    <string name="search_bar_search_placeholder">搜索</string>
+    <!-- Functional Button -->
+    <string name="functional_button_save">保存</string>
+    <string name="functional_button_close">关闭</string>
+    <string name="functional_button_cancel">取消</string>
+    <string name="functional_button_confirm">确认</string>
+    <string name="functional_button_reset">重置</string>
+    <string name="functional_button_remove">移除</string>
+    <string name="functional_button_add">添加</string>
+    <string name="functional_button_import">导入</string>
+    <string name="functional_button_reboot">重启</string>
+    <!-- Menu -->
+    <string name="menu_select_all">全选</string>
+    <string name="menu_deselect_all">取消全选</string>
+    <string name="menu_refresh">刷新</string>
+    <string name="menu_add_system_app">添加系统应用</string>
+    <string name="menu_keybox">Keybox</string>
+    <string name="menu_keybox_import">从文件导入</string>
+    <string name="menu_keybox_paste">粘贴 Keybox</string>
+    <string name="menu_prop_setting">属性设置</string>
+    <string name="menu_config">后端配置</string>
+    <string name="menu_hal">HAL 模式</string>
+    <string name="menu_usb">USB 调试</string>
+    <string name="menu_status">状态</string>
+    <string name="menu_restart">重启</string>
+    <string name="menu_help">帮助</string>
+    <string name="menu_language">语言</string>
+    <string name="menu_about">关于</string>
+    <!-- App list -->
+    <string name="app_list_loading">加载中…</string>
+    <string name="app_list_deny_hint">勾选的应用将被豁免 attestation hook（写入 deny.list）</string>
+    <!-- Help -->
+    <string name="help_help_instructions">使用说明</string>
+    <string name="help_save_description">保存当前黑名单（deny.list）。</string>
+    <string name="help_add_system_app">添加系统应用</string>
+    <string name="help_add_system_app_description">把指定系统应用加入应用列表。</string>
+    <string name="help_set_keybox">Keybox</string>
+    <string name="help_set_keybox_description">导入 keybox.xml（AndroidAttestation 格式）：</string>
+    <string name="help_set_keybox_local">**本地** - 从设备选择 keybox.xml。</string>
+    <string name="help_set_keybox_paste">**粘贴** - 直接粘贴 keybox.xml 内容。</string>
+    <string name="help_prop_settings">属性设置</string>
+    <string name="help_prop_settings_description">编辑 props.conf。每行：key=value、key~match=value（条件覆盖）、once:key=value（仅开机执行）。首行 enabled=1 控制总开关。</string>
+    <string name="help_config">后端配置</string>
+    <string name="help_config_description">编辑 config.toml（后端模式、trust、crypto、log）与 injector.toml（hook 与各 intercept 开关）。</string>
+    <string name="help_hal">HAL 模式</string>
+    <string name="help_hal_description">在 inject（ptrace 注入）与 HAL（KeyMint 替换）模式间切换。HAL 模式会重写 vintf manifest，需重启生效。</string>
+    <string name="help_usb">USB 调试</string>
+    <string name="help_usb_description">切换 adb_enabled。写入 usb.conf，并通过 `settings put global adb_enabled` 应用。</string>
+    <!-- About -->
+    <string name="about_module_name_line1">FKTee-rs</string>
+    <string name="about_module_name_line2">Keystore2 证书链 Hook</string>
+    <string name="about_by">作者</string>
+    <string name="about_author">FKTee-rs Contributors</string>
+    <string name="about_github">GitHub</string>
+    <string name="about_disclaimer">纯 Rust keystore hook 模块（ptrace 注入 + binder ioctl hook）。WebUI 移植自 Tricky Addon。</string>
+    <string name="about_acknowledgment">致谢</string>
+    <string name="about_ack_tricky">Tricky Addon (KOWX712) - WebUI 基础</string>
+    <string name="about_ack_marked">markedjs/marked - Markdown 支持</string>
+    <!-- Prompts -->
+    <string name="prompt_saved_target">黑名单已保存</string>
+    <string name="prompt_save_error">保存黑名单失败</string>
+    <string name="prompt_key_set">Keybox 已导入</string>
+    <string name="prompt_key_set_error">导入 Keybox 失败</string>
+    <string name="prompt_keybox_invalid">Keybox 内容无效</string>
+    <string name="prompt_prop_saved">props.conf 已保存</string>
+    <string name="prompt_prop_save_error">保存 props.conf 失败</string>
+    <string name="prompt_config_saved">配置已保存</string>
+    <string name="prompt_config_save_error">保存配置失败</string>
+    <string name="prompt_hal_saved">HAL 配置已保存</string>
+    <string name="prompt_hal_save_error">保存 HAL 配置失败</string>
+    <string name="prompt_hal_mode_changed">HAL 模式已切换，需重启</string>
+    <string name="prompt_usb_set">USB 调试状态已更新</string>
+    <string name="prompt_usb_set_error">更新 USB 调试失败</string>
+    <string name="prompt_restart_sent">已发送重启信号：%s</string>
+    <string name="prompt_restart_error">发送重启信号失败</string>
+    <string name="prompt_rebooting">正在重启…</string>
+    <string name="prompt_reboot_fail">重启失败，请手动重启</string>
+    <!-- Status -->
+    <string name="status_title">状态</string>
+    <string name="status_mode">模式</string>
+    <string name="status_mode_inject">Inject（ptrace）</string>
+    <string name="status_mode_hal">HAL（KeyMint 替换）</string>
+    <string name="status_mode_unknown">未知</string>
+    <string name="status_daemon">Daemon (fktee)</string>
+    <string name="status_injector">Injector</string>
+    <string name="status_hal_proc">HAL 进程</string>
+    <string name="status_running">运行中</string>
+    <string name="status_stopped">未运行</string>
+    <string name="status_keybox">Keybox</string>
+    <string name="status_present">存在</string>
+    <string name="status_absent">缺失</string>
+    <string name="status_config_files">配置文件</string>
+    <!-- Config dialog -->
+    <string name="config_dialog_title">后端配置</string>
+    <string name="config_section_backend">后端</string>
+    <string name="config_section_trust">Trust</string>
+    <string name="config_section_crypto">Crypto 种子</string>
+    <string name="config_section_log">日志</string>
+    <string name="config_section_injector">Injector Hook</string>
+    <string name="config_backend_mode">模式</string>
+    <string name="config_verified_boot_state">Verified Boot 状态</string>
+    <string name="config_device_locked">设备已锁定</string>
+    <string name="config_vb_key">VB Key</string>
+    <string name="config_vb_hash">VB Hash</string>
+    <string name="config_security_patch">安全补丁</string>
+    <string name="config_root_kek_seed">Root KEK Seed</string>
+    <string name="config_kak_seed">KAK Seed</string>
+    <string name="config_shared_secret_seed">Shared Secret Seed</string>
+    <string name="config_shared_secret_nonce">Shared Secret Nonce</string>
+    <string name="config_log_level">日志级别</string>
+    <string name="config_log_to_kmsg">日志写入 kmsg（隐藏）</string>
+    <string name="config_log_verbose">详细日志</string>
+    <string name="config_hook_enabled">Hook 启用</string>
+    <!-- HAL dialog -->
+    <string name="hal_dialog_title">HAL 模式</string>
+    <string name="hal_mode">HAL 模式</string>
+    <string name="hal_mode_enable">启用 HAL 模式</string>
+    <string name="hal_mode_hint">切换模式需重启。HAL 模式会重写 vintf manifest，将真 HAL 改名为 fktee-real。</string>
+    <string name="hal_forge_mode">Forge 模式</string>
+    <string name="hal_real_hal_instance">真 HAL 实例名</string>
+    <string name="hal_keybox_path">Keybox 路径</string>
+    <string name="hal_deny_list_path">黑名单路径</string>
+    <string name="hal_device">设备信息</string>
+    <string name="hal_android_version">Android 版本</string>
+    <string name="hal_os_version">OS 版本</string>
+    <string name="hal_os_patch_level">OS 补丁级别</string>
+    <string name="hal_vendor_patch_level">厂商补丁级别</string>
+    <string name="hal_boot_patch_level">Boot 补丁级别</string>
+    <string name="hal_keymaster_version">Keymaster 版本</string>
+    <string name="hal_attestation_version">Attestation 版本</string>
+    <string name="hal_security_level">安全级别</string>
+    <string name="hal_hook_enabled">Hook 启用</string>
+    <!-- USB dialog -->
+    <string name="usb_dialog_title">USB 调试</string>
+    <string name="usb_adb_enabled">ADB 启用</string>
+    <!-- Restart dialog -->
+    <string name="restart_dialog_title">重启守护进程</string>
+    <string name="restart_dialog_hint">发送重启信号，service.sh 将重启对应进程。</string>
+    <string name="restart_all">重启全部</string>
+    <string name="restart_fktee">重启 fktee</string>
+    <string name="restart_injector">重启 Injector</string>
+    <string name="restart_hal">重启 HAL</string>
+    <!-- Keybox paste -->
+    <string name="keybox_paste_title">粘贴 Keybox</string>
+    <string name="keybox_paste_placeholder">在此粘贴 keybox.xml 内容</string>
+    <!-- Prop dialog -->
+    <string name="prop_dialog_title">属性设置（props.conf）</string>
+    <string name="prop_enabled">启用</string>
+    <string name="prop_key">键</string>
+    <string name="prop_match">匹配（~）</string>
+    <string name="prop_value">值</string>
+    <string name="prop_once">仅一次</string>
+    <string name="prop_add_rule">添加规则</string>
+    <!-- System app -->
+    <string name="add_system_app_title">添加系统应用</string>
+</resources>

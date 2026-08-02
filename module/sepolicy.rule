@@ -5,6 +5,10 @@ allow keystore system_file file { execute getattr map read receive }
 allow crash_dump keystore process *
 # keystore2 查找 default_android_service（注入后内部 RPC 用）
 allow keystore default_android_service service_manager find
+# ----- ptrace attach keystore2（inject 模式核心，缺失则 PTRACE_ATTACH 被 SELinux 拒绝）-----
+# service.sh(daemon-injector) 运行在 magisk 域，需 attach keystore2 注入 payload。
+allow magisk keystore process { ptrace signal sigchld getsched setsched }
+allow keystore magisk process { sigchld }
 
 # ===== KeyMint HAL 替换路径（HAL 模式，方案 A）所需规则 =====
 # fktee-hal 由 Magisk service.sh 启动，进程域为 magisk（KernelSU/APatch 类似）。
