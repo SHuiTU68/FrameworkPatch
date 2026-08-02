@@ -106,8 +106,18 @@ fi
 chmod 755 "$BINDIR/fktee" "$BINDIR/inject" "$BINDIR/injector.payload" "$BINDIR/fktee-hal"
 
 # ---------- WebUI ----------
-if [ -d "$MODPATH/webroot" ]; then
-  ui_print "- WebUI bundled"
+# SKIPUNZIP=1 时不会自动解压任何文件，必须手动解压 webroot 整个目录。
+# 使用通配符递归解压 webroot/ 下的所有文件，保留目录结构。
+ui_print "- Extracting WebUI"
+if unzip -o "$ZIPFILE" 'webroot/*' -d "$MODPATH" >&2 2>/dev/null; then
+  if [ -d "$MODPATH/webroot" ]; then
+    # 移除 unzip 通配符可能产生的空 webroot 条目，保留实际文件
+    ui_print "- WebUI bundled ($(ls -1 "$MODPATH/webroot" 2>/dev/null | wc -l) entries)"
+  else
+    ui_print "- WebUI not bundled in this zip"
+  fi
+else
+  ui_print "- WebUI not bundled in this zip (skipped)"
 fi
 
 # ---------- Config dir setup ----------
