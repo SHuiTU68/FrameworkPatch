@@ -30,8 +30,6 @@ const NT_PRSTATUS: libc::c_long = 1;
 #[cfg(target_arch = "aarch64")]
 const __NR_memfd_create: u64 = 279;
 #[cfg(target_arch = "aarch64")]
-const __NR_ftruncate: u64 = 46;
-#[cfg(target_arch = "aarch64")]
 const __NR_close: u64 = 57;
 
 /// memfd_create flags
@@ -392,9 +390,11 @@ fn find_remote_symbol(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64>
 ///
 /// 使用 memfd_create + /proc/<pid>/fd/ 写入的组合方式绕过 mount namespace 隔离：
 /// 1. 在目标进程内远程调用 memfd_create 创建匿名内存文件
-/// 2. 远程调用 ftruncate 设置文件大小
-/// 3. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容
-/// 4. 远程调用 android_dlopen_ext 并传入 ANDROID_DLEXT_USE_LIBRARY_FD
+/// 2. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容（自动扩展文件大小）
+/// 3. 远程调用 android_dlopen_ext 并传入 ANDROID_DLEXT_USE_LIBRARY_FD
+///
+/// 注意：不调用 ftruncate 是因为 keystore2 的 seccomp 过滤器可能阻止该 syscall；
+/// 直接 write 到 memfd 会自动扩展文件大小，无需 pre-alloc。
 ///
 /// 这比 SCM_RIGHTS 方式更简单：不需要在远程进程中建立 socket/bind/listen/accept，
 /// 也不需要本地的 sendmsg/recvmsg 配合。memfd 是内核内存文件，不依赖挂载命名空间。
@@ -462,20 +462,9 @@ fn remote_dlopen_ext(pid: i32, dlopen_ext_addr: u64, path: &CString, _libc_base:
     }
     log::debug!("memfd_create 成功，fd={}", memfd);
 
-    // 7. 远程调用 ftruncate(memfd, file_size)
-    log::debug!("远程 ftruncate(memfd={}, size={})...", memfd, file_size);
-    let trunc_ret = remote_syscall(
-        pid, __NR_ftruncate, memfd as u64, file_size as u64,
-        0, 0, 0, &regs, &maps,
-    ).context("远程 ftruncate 失败")?;
-
-    if trunc_ret < 0 {
-        // ftruncate 失败，关闭 memfd 后向上报错
-        let _ = remote_syscall(pid, __NR_close, memfd as u64, 0, 0, 0, 0, &regs, &maps);
-        bail!("ftruncate 返回 {}，设置文件大小失败", trunc_ret);
-    }
-
-    // 8. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容
+    // 7. 本地通过 /proc/<pid>/fd/<memfd> 写入 payload 内容
+    // 注意：不调用 ftruncate — keystore2 的 seccomp 可能阻止该 syscall，
+    // 直接 write 到 memfd 会自动扩展文件大小。
     let proc_fd_path = format!("/proc/{}/fd/{}", pid, memfd);
     log::debug!("通过 {} 写入 payload 内容...", proc_fd_path);
     let payload_content = std::fs::read(path.to_str().unwrap_or(""))
