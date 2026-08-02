@@ -1,7 +1,10 @@
 #!/system/bin/sh
 # customize.sh - FKTee-rs installation script (Magisk/KSU/APatch)
 
-SKIPUNZIP=1
+# 不设 SKIPUNZIP：让管理器自动解压 zip 到 $MODPATH。
+# 之前用 SKIPUNZIP=1 + 手动 unzip，部分设备的 toybox unzip 行为异常或
+# $ZIPFILE 变量未设置，导致解压失败、文件为空。让管理器自动解压最可靠。
+
 PROP_SKIP_DELETE=1
 
 # ---------- Helper ----------
@@ -30,19 +33,22 @@ if [ -z "$SDK" ] || [ "$SDK" -lt 29 ]; then
 fi
 ui_print "- Android SDK: $SDK"
 
-# ---------- Extract module files ----------
-ui_print "- Extracting module files..."
-unzip -o "$ZIPFILE" -x 'META-INF/*' -d "$MODPATH" >/dev/null 2>&1
+# ---------- Verify extraction ----------
+# 管理器已自动解压，验证关键文件存在
+ui_print "- Verifying extracted files..."
+if [ ! -f "$MODPATH/service.sh" ] || [ ! -f "$MODPATH/module.prop" ]; then
+    abort "! Extraction failed: service.sh or module.prop missing in $MODPATH"
+fi
+if [ ! -d "$MODPATH/libs/$ARCH" ]; then
+    abort "! No binaries found for $ARCH in libs/$ARCH"
+fi
+ui_print "- Files extracted successfully"
 
 # ---------- Select binaries by architecture ----------
 ui_print "- Installing binaries for $ARCH..."
-if [ -d "$MODPATH/libs/$ARCH" ]; then
-    for bin in "$MODPATH/libs/$ARCH"/*; do
-        [ -f "$bin" ] && chmod 0755 "$bin"
-    done
-else
-    abort "! No binaries found for $ARCH in libs/$ARCH"
-fi
+for bin in "$MODPATH/libs/$ARCH"/*; do
+    [ -f "$bin" ] && chmod 0755 "$bin"
+done
 
 # ---------- Create config directory ----------
 TEERS_DIR=/data/adb/Tee-rs

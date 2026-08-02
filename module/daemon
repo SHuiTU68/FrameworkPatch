@@ -43,7 +43,8 @@ is_running() {
 start_once() {
     [ -x "$BIN" ] || return 1
     rm -f "$PIDFILE"
-    "$BIN" &
+    # 日志重定向到 logs/fktee.log，便于排查崩溃/panic
+    nohup "$BIN" >"$TEERS_DIR/logs/fktee.log" 2>&1 &
     echo $! > "$PIDFILE"
 }
 
