@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn test_binder_struct_sizes() {
         assert_eq!(std::mem::size_of::<BinderWriteRead>(), 48);
-        assert_eq!(std::mem::size_of::<BinderTransactionData>(), 56);
-        assert_eq!(std::mem::size_of::<BinderTransactionDataSecCtx>(), 64);
+        assert_eq!(std::mem::size_of::<BinderTransactionData>(), 72);
+        assert_eq!(std::mem::size_of::<BinderTransactionDataSecCtx>(), 80);
     }
 }
