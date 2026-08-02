@@ -208,7 +208,20 @@ else
   start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
 fi
 
-# ---------- 主循环：restart 信号 + 定期重应用 props ----------
+# ---------- 主循环：restart 信号 + props 变更检测 ----------
+# props 不再每 5s 全量重应用（耗 CPU），改为检测 props.conf mtime 变更时重应用。
+PROPS_MTIME=0
+check_props_change() {
+  local conf="$TEERS_DIR/props.conf"
+  [ -f "$conf" ] || return 1
+  local mtime=$(stat -c %Y "$conf" 2>/dev/null || echo 0)
+  if [ "$mtime" != "$PROPS_MTIME" ]; then
+    PROPS_MTIME=$mtime
+    return 0
+  fi
+  return 1
+}
+
 while true; do
   if [ -f "$TEERS_DIR/restart.all" ]; then
     rm -f "$TEERS_DIR/restart.all"
@@ -241,9 +254,10 @@ while true; do
     [ "$HAL_ENABLED" = "1" ] && start_hal
   fi
 
-  # 定期重应用 props（loop 模式跳过 once: 条目）
-  apply_props loop
-  apply_usb
+  # props 仅在文件变更时重应用（loop 模式），减少 CPU 占用
+  if check_props_change; then
+    apply_props loop
+  fi
 
   sleep 5
 done

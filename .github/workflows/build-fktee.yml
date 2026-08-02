@@ -22,7 +22,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          targets: aarch64-linux-android
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -35,30 +35,21 @@ jobs:
         run: |
           echo "ANDROID_NDK_HOME=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          # 添加 NDK clang 到 PATH
           echo "${{ steps.setup_ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
       - name: Run unit tests (host)
-        # 在 host 上跑单元测试（certgen / hal 的纯逻辑测试，不依赖 Android）。
-        # 跨架构交叉编译前先验证逻辑正确性，避免到打包阶段才发现 bug。
         run: cargo test --workspace --no-fail-fast
 
-      - name: Build Rust binaries
+      - name: Build Rust binaries (arm64-v8a only)
         run: |
-          # 为所有声明支持的 ABI 构建。customize.sh 允许 arm64-v8a 与 x86_64，
-          # 两者都必须产出，否则对应架构设备安装时会因 libs/$ARCH 缺失而 abort。
-          for arch in arm64-v8a x86_64; do
-            cargo ndk -t $arch build --release -p fktee-injector
-            cargo ndk -t $arch build --release -p fktee-daemon
-            cargo ndk -t $arch build --release -p certgen
-            # fktee-hal：KeyMint HAL 替换实现（方案 A）。
-            # generation 模式：软件生成完整虚拟密钥 + IKeyMintOperation 签名。
-            # leaf_hack 模式：证书链替换。参考 TEESimulator。
-            cargo ndk -t $arch build --release -p fktee-hal
-          done
+          # 仅构建 arm64-v8a（移除 x86_64 支持，减小体积与构建时间）
+          cargo ndk -t arm64-v8a build --release -p fktee-injector
+          cargo ndk -t arm64-v8a build --release -p fktee-daemon
+          cargo ndk -t arm64-v8a build --release -p certgen
+          cargo ndk -t arm64-v8a build --release -p fktee-hal
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -74,22 +65,14 @@ jobs:
       - name: Package Magisk module
         run: |
           mkdir -p output
-          mkdir -p module/libs/arm64-v8a module/libs/x86_64
+          mkdir -p module/libs/arm64-v8a
           # arm64-v8a
           cp target/aarch64-linux-android/release/inject            module/libs/arm64-v8a/inject
           cp target/aarch64-linux-android/release/fktee             module/libs/arm64-v8a/fktee
-          # ★ payload 是 inject_payload cdylib（定义 entry()），不是 libcertgen.so。
-          #   libcertgen.so 只导出 JNI 符号、没有 entry，用它当 payload 会导致
-          #   injector 远程 dlsym("entry") 返回 NULL 注入必然失败。
+          # payload 是 inject_payload cdylib（定义 entry()）
           cp target/aarch64-linux-android/release/libinject_payload.so module/libs/arm64-v8a/injector.payload
-          # fktee-hal：KeyMint HAL 替换实现（方案 A，generation + leaf_hack 模式）
+          # fktee-hal：KeyMint HAL 替换实现（方案 A）
           cp target/aarch64-linux-android/release/fktee-hal     module/libs/arm64-v8a/fktee-hal
-          # x86_64
-          cp target/x86_64-linux-android/release/inject             module/libs/x86_64/inject
-          cp target/x86_64-linux-android/release/fktee              module/libs/x86_64/fktee
-          cp target/x86_64-linux-android/release/libinject_payload.so module/libs/x86_64/injector.payload
-          # fktee-hal：KeyMint HAL 替换实现（方案 A，generation + leaf_hack 模式）
-          cp target/x86_64-linux-android/release/fktee-hal          module/libs/x86_64/fktee-hal
           cd module && zip -r ../output/FKTee-rs-v0.1.0.zip . -x '*.git*'
 
       - uses: actions/upload-artifact@v4

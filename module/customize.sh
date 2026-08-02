@@ -6,7 +6,7 @@
 SKIPUNZIP=1
 
 SONAME="FKTee-rs"
-SUPPORTED_ABIS="arm64 x64"
+SUPPORTED_ABIS="arm64"
 MIN_SDK=29
 
 # ---------- Root implementation detection ----------
@@ -88,14 +88,7 @@ chmod 755 "$MODPATH/daemon" "$MODPATH/daemon-injector" \
   "$MODPATH/uninstall.sh" "$MODPATH/action.sh"
 
 # ---------- Extract binaries by architecture ----------
-if [ "$ARCH" = "x64" ] || [ "$ARCH" = "x86_64" ]; then
-  ui_print "- Using packaged x64 binaries"
-  BINDIR="$MODPATH/libs/x86_64"
-  extract "$ZIPFILE" 'libs/x86_64/fktee'              "$MODPATH"
-  extract "$ZIPFILE" 'libs/x86_64/inject'             "$MODPATH"
-  extract "$ZIPFILE" 'libs/x86_64/injector.payload'   "$MODPATH"
-  extract "$ZIPFILE" 'libs/x86_64/fktee-hal'          "$MODPATH"
-elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-v8a" ]; then
+if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-v8a" ]; then
   ui_print "- Using packaged arm64 binaries"
   BINDIR="$MODPATH/libs/arm64-v8a"
   extract "$ZIPFILE" 'libs/arm64-v8a/fktee'           "$MODPATH"
@@ -103,7 +96,7 @@ elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-v8a" ]; then
   extract "$ZIPFILE" 'libs/arm64-v8a/injector.payload' "$MODPATH"
   extract "$ZIPFILE" 'libs/arm64-v8a/fktee-hal'       "$MODPATH"
 else
-  abort "! Unsupported platform: $ARCH"
+  abort "! Unsupported platform: $ARCH (only arm64-v8a is supported)"
 fi
 
 [ -f "$BINDIR/fktee" ]             || abort "! Missing $BINDIR/fktee"
