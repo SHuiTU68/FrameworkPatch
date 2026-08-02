@@ -50,22 +50,43 @@ prepare_injector() {
     return 1
   fi
 
-  # 复制 payload 到稳定位置（/data/adb/Tee-rs/data/），避免因 Magisk 覆盖层
-  # 变更或 SELinux 阻止 keystore2 读取模块目录下的文件
+  # 将 payload 复制到稳定位置（/data/adb/Tee-rs/data/），
+  # 避免 Magisk 覆盖层变更或 SELinux 阻止 keystore2 读取模块目录下的文件。
+  #
+  # 注意：sepolicy.rule 只允许 keystore 读 system_file（见 `allow keystore system_file file`），
+  # 因此只能设 system_file 上下文，不能设 keystore2_file。
   STABLE_PAYLOAD="$STATE_DIR/injector.payload"
+  COPY_OK=0
   if [ "$TARGET_PAYLOAD" != "$STABLE_PAYLOAD" ]; then
-    cp -f "$TARGET_PAYLOAD" "$STABLE_PAYLOAD" 2>/dev/null || {
-      echo "[injector-daemon] 复制 payload 到 $STABLE_PAYLOAD 失败" >>"$TEERS_DIR/logs/injector.log"
-      # 不返回失败，仍然尝试用原路径
-    }
+    if cp -f "$TARGET_PAYLOAD" "$STABLE_PAYLOAD" 2>/dev/null; then
+      COPY_OK=1
+    else
+      echo "[injector-daemon] 复制 payload 到 $STABLE_PAYLOAD 失败，回退到原路径" >>"$TEERS_DIR/logs/injector.log"
+    fi
+  else
+    # 已经是稳定路径，直接使用
+    COPY_OK=1
   fi
-  chmod 0644 "$STABLE_PAYLOAD" 2>/dev/null || true
-  # 设置 SELinux 上下文为 keystore2 可读的类型
-  chcon u:object_r:keystore2_file:s0 "$STABLE_PAYLOAD" 2>/dev/null || \
-  chcon u:object_r:system_file:s0 "$STABLE_PAYLOAD" 2>/dev/null || true
 
-  # 优先使用稳定路径
-  TARGET_PAYLOAD="$STABLE_PAYLOAD"
+  if [ "$COPY_OK" = "1" ]; then
+    chmod 0644 "$STABLE_PAYLOAD" 2>/dev/null || true
+    # 只设 system_file（sepolicy 已允许 keystore 读），不设 keystore2_file
+    if chcon u:object_r:system_file:s0 "$STABLE_PAYLOAD" 2>/dev/null; then
+      echo "[injector-daemon] payload SELinux 上下文已设为 system_file" >>"$TEERS_DIR/logs/injector.log"
+    else
+      # restorecon 回退（让系统自动分配上下文）
+      restorecon "$STABLE_PAYLOAD" 2>/dev/null || true
+    fi
+    # 使用稳定路径后再验证文件存在
+    if [ -f "$STABLE_PAYLOAD" ]; then
+      TARGET_PAYLOAD="$STABLE_PAYLOAD"
+      echo "[injector-daemon] 使用稳定 payload 路径: $STABLE_PAYLOAD" >>"$TEERS_DIR/logs/injector.log"
+    else
+      # 稳定路径文件不存在，回退到原模块路径
+      echo "[injector-daemon] 稳定路径文件不存在，回退到原路径: $TARGET_PAYLOAD" >>"$TEERS_DIR/logs/injector.log"
+    fi
+  fi
+  # 如果 COPY_OK=0（复制失败），TARGET_PAYLOAD 保持原模块路径不变
 
   return 0
 }

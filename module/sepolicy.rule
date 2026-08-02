@@ -6,6 +6,9 @@
 allow keystore system_file unix_dgram_socket { getattr read recvfrom }
 allow system_file keystore unix_dgram_socket sendto
 allow keystore system_file file { execute getattr map read receive }
+# 回退：允许 keystore 读 system_data_file / magisk_file（/data/ 下文件的默认类型）
+allow keystore system_data_file file { getattr map read }
+allow keystore magisk_file file { getattr map read }
 # crash_dump 读取 keystore2 内存（注入调试用）
 allow crash_dump keystore process *
 
