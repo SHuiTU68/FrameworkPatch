@@ -25,12 +25,18 @@ mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
 
 # ---------- pid_matches_script (参考 OMK) ----------
 # 检查 pid 对应的 cmdline 是否包含 script 名，避免 pid 复用误判。
+# 注意：部分 Android 版本的 cmdline 只显示 "sh" 不包含脚本路径，
+# 因此放宽检查：如果 cmdline 不可读或脚本名（basename）匹配则通过。
 pid_matches_script() {
   pid=$1
   script=$2
   [ -r "/proc/$pid/cmdline" ] || return 1
   cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-  echo "$cmdline" | grep -F "$script" >/dev/null 2>&1
+  # 先查完整路径，再查 basename（兼容 cmdline 只显示 "sh" 的情况）
+  echo "$cmdline" | grep -F "$script" >/dev/null 2>&1 && return 0
+  # 如果 cmdline 中不含完整路径，用 basename 宽松匹配
+  local base=$(basename "$script" 2>/dev/null)
+  [ -n "$base" ] && echo "$cmdline" | grep -F "$base" >/dev/null 2>&1
 }
 
 # ---------- start_daemon (参考 OMK) ----------
@@ -208,7 +214,19 @@ else
   start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
 fi
 
-# ---------- 主循环：restart 信号 + props 变更检测 ----------
+# ---------- 检查守护进程是否存活 ----------
+is_daemon_alive() {
+  local pidfile=$1
+  [ -f "$pidfile" ] || return 1
+  local pid=$(cat "$pidfile" 2>/dev/null)
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  # 不检查 pid_matches_script（cmdline 可能不含完整路径），
+  # 只靠 pidfile 和 kill -0 判断，简单可靠。
+  return 0
+}
+
+# ---------- 主循环：restart 信号 + daemon 存活监控 + props 变更检测 ----------
 # props 不再每 5s 全量重应用（耗 CPU），改为检测 props.conf mtime 变更时重应用。
 PROPS_MTIME=0
 check_props_change() {
@@ -252,6 +270,23 @@ while true; do
     rm -f "$TEERS_DIR/restart.hal"
     kill_pidfile "$PID_HAL"
     [ "$HAL_ENABLED" = "1" ] && start_hal
+  fi
+
+  # ---------- daemon 存活监控（崩溃后自动重启）----------
+  if [ "$HAL_ENABLED" != "1" ]; then
+    if ! is_daemon_alive "$PID_FKTEE"; then
+      echo "[fktee] daemon 未运行，自动重启" >>"$TEERS_DIR/logs/fktee.log" 2>/dev/null
+      start_daemon "$MODDIR/daemon" "$PID_FKTEE"
+    fi
+    if ! is_daemon_alive "$PID_INJECTOR"; then
+      echo "[fktee] injector daemon 未运行，自动重启" >>"$TEERS_DIR/logs/injector.log" 2>/dev/null
+      start_daemon "$MODDIR/daemon-injector" "$PID_INJECTOR"
+    fi
+  else
+    if ! is_daemon_alive "$PID_HAL"; then
+      echo "[fktee-hal] HAL daemon 未运行，自动重启" >>"$TEERS_DIR/logs/hal.log" 2>/dev/null
+      start_hal
+    fi
   fi
 
   # props 仅在文件变更时重应用（loop 模式），减少 CPU 占用

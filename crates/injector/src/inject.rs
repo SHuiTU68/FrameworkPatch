@@ -184,7 +184,9 @@ fn do_inject(pid: i32, payload_path: &Path) -> Result<()> {
         // 5. 远程调用 android_dlopen_ext 加载 payload
         //    先找到 android_dlopen_ext 的地址
         //    android_dlopen_ext 在 libdl.so 中，但实际由 linker 实现
-        let dlopen_ext_addr = find_remote_symbol(pid, &maps, "android_dlopen_ext")
+        let dlopen_ext_addr = find_remote_symbol_in_libdl(pid, &maps, "android_dlopen_ext")
+            .or_else(|| find_remote_symbol(pid, &maps, "android_dlopen_ext"))
+            .or_else(|| find_remote_symbol_in_libdl(pid, &maps, "dlopen"))
             .or_else(|| find_remote_symbol(pid, &maps, "dlopen"))
             .ok_or_else(|| anyhow::anyhow!("找不到 android_dlopen_ext/dlopen 符号"))?;
 
@@ -207,7 +209,8 @@ fn do_inject(pid: i32, payload_path: &Path) -> Result<()> {
         log::info!("payload 加载成功，handle=0x{:x}", handle as usize);
 
         // 7. 远程调用 dlsym(handle, "entry") 找到入口符号
-        let dlsym_addr = find_remote_symbol(pid, &maps, "dlsym")
+        let dlsym_addr = find_remote_symbol_in_libdl(pid, &maps, "dlsym")
+            .or_else(|| find_remote_symbol(pid, &maps, "dlsym"))
             .ok_or_else(|| anyhow::anyhow!("找不到 dlsym 符号"))?;
 
         let entry_name = CString::new("entry").unwrap();
@@ -284,7 +287,37 @@ fn find_lib_base(maps: &[MapEntry], lib_name: &str) -> Option<u64> {
         .map(|m| m.start)
 }
 
-/// 在目标进程中查找符号地址
+/// 在目标进程的 libdl.so 中查找符号地址
+///
+/// `dlsym` 和 `android_dlopen_ext` 都在 libdl.so 中，用这个专门的函数
+/// 直接通过 libdl.so 基址计算偏移，比通用 find_remote_symbol 更可靠。
+fn find_remote_symbol_in_libdl(pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64> {
+    let remote_libdl = find_lib_base(maps, "libdl.so")?;
+    let local_maps = parse_proc_maps(nix::unistd::getpid().as_raw()).ok()?;
+    let local_libdl = find_lib_base(&local_maps, "libdl.so")?;
+
+    unsafe {
+        let dl_cstr = CString::new("libdl.so").ok()?;
+        let local_handle =
+            libc::dlopen(dl_cstr.as_ptr(), libc::RTLD_NOW | libc::RTLD_NOLOAD);
+        if local_handle.is_null() {
+            return None;
+        }
+
+        let sym_cstr = CString::new(symbol).ok()?;
+        let local_sym = libc::dlsym(local_handle, sym_cstr.as_ptr());
+        libc::dlclose(local_handle);
+
+        if local_sym.is_null() {
+            return None;
+        }
+
+        let offset = local_sym as u64 - local_libdl;
+        Some(remote_libdl + offset)
+    }
+}
+
+/// 在目标进程中查找符号地址（通用方法，回退用）
 /// 先在本地进程查找符号偏移，再加上远程库基址
 fn find_remote_symbol(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64> {
     // 在本地进程中查找该符号在 libc/libdl 中的地址
@@ -336,27 +369,7 @@ fn find_remote_symbol(_pid: i32, maps: &[MapEntry], symbol: &str) -> Option<u64>
     }
 
     // 回退：尝试直接在 libdl.so 中查找
-    let libdl_base = find_lib_base(maps, "libdl.so")?;
-    let local_libdl = find_lib_base(&local_maps, "libdl.so")?;
-
-    unsafe {
-        let dl_cstr = CString::new("libdl.so").ok()?;
-        let local_handle = libc::dlopen(dl_cstr.as_ptr(), libc::RTLD_NOW | libc::RTLD_NOLOAD);
-        if local_handle.is_null() {
-            return None;
-        }
-
-        let sym_cstr = CString::new(symbol).ok()?;
-        let local_sym = libc::dlsym(local_handle, sym_cstr.as_ptr());
-        libc::dlclose(local_handle);
-
-        if local_sym.is_null() {
-            return None;
-        }
-
-        let offset = local_sym as u64 - local_libdl;
-        Some(libdl_base + offset)
-    }
+    find_remote_symbol_in_libdl(_pid, maps, symbol)
 }
 
 /// 远程调用 android_dlopen_ext(path, flags, &extinfo)
