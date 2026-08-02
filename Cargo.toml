@@ -54,3 +54,8 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# inject_payload.so 必须保留 entry 符号供远程 dlsym 查找，
+# 覆盖 workspace 的 strip=symbols，否则 dlsym 返回 NULL。
+[profile.release.package.fktee-injector]
+strip = false

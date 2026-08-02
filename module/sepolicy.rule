@@ -38,3 +38,13 @@ allow magisk system_data_file dir { search }
 # 7. HAL 进程写入日志（/data/adb/Tee-rs/logs/）
 allow magisk magisk_file file { write create append }
 allow magisk magisk_file dir { write add_name }
+
+# 8. post-fs-data / service.sh 执行 mount --bind 覆盖 vendor vintf manifest
+#    magisk 域需 mount 权限 + 读写 vendor_files
+allow magisk self capability { sys_admin }
+allow magisk vendor_configs_file file { read write getattr setattr mount }
+allow magisk vendor_configs_file dir { read search mounton }
+allow magisk odm_configs_file file { read write getattr setattr mount }
+allow magisk odm_configs_file dir { read search mounton }
+allow magisk tmpfs filesystem { mount }
+allow magisk magisk_file filesystem { mount }

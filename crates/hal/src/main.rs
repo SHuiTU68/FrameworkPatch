@@ -468,10 +468,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 注册为 default 实例。真 HAL 必须已被 vintf manifest 改名为 real_hal_instance，
     // 否则 add_service 会因 default 已占用失败。
     let service = BnKeyMintDevice::new_binder(proxy);
-    hub::add_service(
+    log::info!("fktee-hal: registering as IKeyMintDevice/default ...");
+    if let Err(e) = hub::add_service(
         "android.hardware.security.keymint.IKeyMintDevice/default",
         service.as_binder(),
-    )?;
+    ) {
+        log::error!("fktee-hal: add_service(default) 失败: {e:?}");
+        log::error!("fktee-hal: 通常原因：1) vintf 未重写，真 HAL 仍占 default");
+        log::error!("fktee-hal:             2) sepolicy 未放行 service_manager add");
+        log::error!("fktee-hal:             3) hal.enabled 存在但 post-fs-data bind mount 失败");
+        return Err(format!("add_service 失败: {e:?}").into());
+    }
     log::info!("fktee-hal: registered as IKeyMintDevice/default");
 
     // 加入 binder 线程池处理请求（阻塞至线程池终止）。
