@@ -288,7 +288,7 @@ struct XmlKey {
 }
 
 /// 带 `format` 属性 + 文本内容的元素（PrivateKey / Certificate 通用）。
-#[derive(Deserialize, Debug)]
+#[derive(Default, Deserialize, Debug)]
 struct XmlPemText {
     #[serde(rename = "@format", default)]
     #[allow(dead_code)]
@@ -297,7 +297,7 @@ struct XmlPemText {
     text: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Default, Deserialize, Debug)]
 struct XmlCertificateChain {
     #[serde(rename = "Certificate", default)]
     certificates: Vec<XmlPemText>,
