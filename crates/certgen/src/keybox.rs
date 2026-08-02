@@ -82,37 +82,50 @@ impl Keybox {
     /// - `<AndroidAttestation>` AOSP 标准格式
     /// - `<Key>` / `<key>`（大小写不敏感）元素名
     pub fn from_xml(xml: &str) -> Result<Self> {
-        // 尝试直接解析（XmlKeybox 已标注 serde(rename = "keybox")）
-        let result = Self::parse_xml_inner(xml);
-        if let Ok(kb) = result {
+        // 1. 尝试直接解析（XmlKeybox, rename = "keybox"）
+        if let Ok(kb) = Self::parse_xml_inner(xml) {
             return Ok(kb);
         }
 
-        // 尝试替换根元素名称为 <keybox>（处理 <Keybox> / <KEYBOX> / <AndroidAttestation> 等）
-        let root_variants = ["Keybox", "KEYBOX", "AndroidAttestation", "keymaster", "Keymaster"];
-        for root in &root_variants {
+        // 2. 尝试替换根元素名称为 <keybox>（处理 <Keybox> / <KEYBOX> / <keymaster> 等）
+        for root in &["Keybox", "KEYBOX", "keymaster", "Keymaster"] {
             let normalized = xml
                 .replace(&format!("<{root}>"), "<keybox>")
                 .replace(&format!("</{root}>"), "</keybox>");
-            let result = Self::parse_xml_inner(&normalized);
-            if let Ok(kb) = result {
+            if let Ok(kb) = Self::parse_xml_inner(&normalized) {
                 return Ok(kb);
             }
         }
 
-        // 最后尝试：把 XML 整体转为小写根元素 + <Key> 统一格式
-        let lower = xml
+        // 3. 尝试 AndroidAttestation 格式：
+        //    <AndroidAttestation> → <Keybox DeviceID="..."> → <Key> → ...
+        //    需要去掉 <Keybox> 包装层和 <NumberOfKeyboxes> / <NumberOfCertificates>
+        if let Ok(kb) = Self::parse_android_attestation(xml) {
+            return Ok(kb);
+        }
+
+        // 同样用 <AndroidAttestation> 根元素替换后，再去掉 <Keybox> 包装层
+        for variant in &["AndroidAttestation", "androidattestation"] {
+            let mut normalized = xml
+                .replace(&format!("<{variant}>"), "<keybox>")
+                .replace(&format!("</{variant}>"), "</keybox>");
+            Self::strip_keybox_wrapper(&mut normalized);
+            if let Ok(kb) = Self::parse_xml_inner(&normalized) {
+                return Ok(kb);
+            }
+        }
+
+        // 4. 最后尝试：全小写化 + <Key> 统一格式
+        let mut lower = xml
             .to_lowercase()
-            // 把常见根元素统一为 <keybox>
             .replace("<androidattestation>", "<keybox>")
             .replace("</androidattestation>", "</keybox>")
             .replace("<keymaster>", "<keybox>")
             .replace("</keymaster>", "</keybox>")
-            // 把 <key> 统一为 <Key>
             .replace("<key>", "<Key>")
             .replace("</key>", "</Key>");
-        let result = Self::parse_xml_inner(&lower);
-        if let Ok(kb) = result {
+        Self::strip_keybox_wrapper(&mut lower);
+        if let Ok(kb) = Self::parse_xml_inner(&lower) {
             return Ok(kb);
         }
 
@@ -121,6 +134,74 @@ impl Keybox {
         anyhow::bail!(
             "keybox.xml 中没有找到任何 <Key> 元素。XML 前 200 字符: {preview}..."
         );
+    }
+
+    /// 尝试解析 AndroidAttestation 格式（通过 serde 直接处理嵌套结构）。
+    fn parse_android_attestation(xml: &str) -> Result<Self> {
+        let aa: XmlAndroidAttestation = quick_xml::de::from_str(xml)
+            .map_err(|e| anyhow::anyhow!("parse AndroidAttestation failed: {e}"))?;
+        let all_keys: Vec<XmlKey> = aa.keyboxes.into_iter()
+            .flat_map(|kb| kb.keys)
+            .collect();
+        if !all_keys.is_empty() {
+            return Self::build_from_keys(all_keys);
+        }
+        anyhow::bail!("no <Key> elements in AndroidAttestation");
+    }
+
+    /// 去掉 `<Keybox ...>` 和 `</Keybox>` 包装层，以及 `<NumberOfKeyboxes>` / `<NumberOfCertificates>` 元素。
+    /// 输入：`<keybox>...<Keybox DeviceID="..."><Key>...</Key></Keybox>...</keybox>`
+    /// 输出：`<keybox>...<Key>...</Key>...</keybox>`
+    fn strip_keybox_wrapper(xml: &mut String) {
+        // 移除 <NumberOfKeyboxes> ... </NumberOfKeyboxes>
+        Self::remove_tag_with_content(xml, "NumberOfKeyboxes");
+        // 移除 <NumberOfCertificates> ... </NumberOfCertificates>
+        Self::remove_tag_with_content(xml, "NumberOfCertificates");
+        // 移除 <Keybox ...> 和 </Keybox>
+        Self::remove_open_tag(xml, "Keybox");
+        Self::remove_close_tag(xml, "Keybox");
+    }
+
+    /// 移除 `<tag>...</tag>` 及其内容。
+    fn remove_tag_with_content(xml: &mut String, tag: &str) {
+        let open_start = format!("<{tag}>");
+        let open_end = format!("</{tag}>");
+        loop {
+            if let Some(start) = xml.find(&open_start) {
+                if let Some(end) = xml[start..].find(&open_end) {
+                    let removed_end = start + end + open_end.len();
+                    xml.replace_range(start..removed_end, "");
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    /// 移除 `<tag ...>` 开标签（含属性）。
+    fn remove_open_tag(xml: &mut String, tag: &str) {
+        let pattern = format!("<{tag}");
+        loop {
+            if let Some(start) = xml.find(&pattern) {
+                if let Some(end) = xml[start..].find('>') {
+                    xml.replace_range(start..start + end + 1, "");
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    /// 移除 `</tag>` 闭标签。
+    fn remove_close_tag(xml: &mut String, tag: &str) {
+        let pattern = format!("</{tag}>");
+        loop {
+            if let Some(pos) = xml.find(&pattern) {
+                xml.replace_range(pos..pos + pattern.len(), "");
+            } else {
+                break;
+            }
+        }
     }
 
     /// 内部解析：尝试一次 XML 解析，返回 `Keybox` 或失败。
@@ -220,6 +301,26 @@ struct XmlPemText {
 struct XmlCertificateChain {
     #[serde(rename = "Certificate", default)]
     certificates: Vec<XmlPemText>,
+}
+
+/// 用于解析 `<AndroidAttestation>` 根元素格式（AOSP 标准 keybox 格式）。
+///
+/// 结构：`<AndroidAttestation>` → `<Keybox DeviceID="...">` → `<Key>` → ...
+#[derive(Deserialize, Debug)]
+#[serde(rename = "AndroidAttestation")]
+struct XmlAndroidAttestation {
+    #[serde(rename = "Keybox", default)]
+    keyboxes: Vec<XmlKeyboxWrapper>,
+}
+
+/// `<Keybox>` 包装层，内含 `<Key>` 元素列表。
+#[derive(Deserialize, Debug)]
+struct XmlKeyboxWrapper {
+    #[serde(rename = "@DeviceID", default)]
+    #[allow(dead_code)]
+    device_id: String,
+    #[serde(rename = "Key", default)]
+    keys: Vec<XmlKey>,
 }
 
 #[cfg(test)]
