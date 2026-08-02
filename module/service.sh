@@ -18,8 +18,15 @@ HAL_BIN="$MODDIR/libs/$ARCH/fktee-hal"
 PID_FKTEE="$TEERS_DIR/data/fktee.pid"
 PID_INJECTOR="$TEERS_DIR/data/injector.pid"
 PID_HAL="$TEERS_DIR/data/hal.pid"
+# HAL 模式检测：优先级 hal.enabled 文件 > config.toml 的 backend.mode
 HAL_ENABLED=0
-[ -f "$TEERS_DIR/hal.enabled" ] && HAL_ENABLED=1
+if [ -f "$TEERS_DIR/hal.enabled" ]; then
+  HAL_ENABLED=1
+elif [ -f "$TEERS_DIR/config.toml" ]; then
+  # 从 config.toml 读取 backend.mode
+  CFG_MODE=$(grep -E '^mode\s*=\s*"hal"' "$TEERS_DIR/config.toml" 2>/dev/null)
+  [ -n "$CFG_MODE" ] && HAL_ENABLED=1
+fi
 
 mkdir -p "$TEERS_DIR" "$TEERS_DIR/data" "$TEERS_DIR/logs"
 
