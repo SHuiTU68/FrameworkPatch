@@ -42,14 +42,14 @@ forge_mode = "auto"
 # deny_packages = ["com.example.app"]
 
 [device]
-# DeviceInfo 默认值（对应 certgen::DeviceInfo）。
-# 0 / 空 → certgen 用合理默认兜底（attestation_version=300, security_level=1=TEE 等）。
-# 想伪装特定设备/版本时填具体值。
-android_version = 0       # 如 14
-os_version = 0            # 如 140000
-os_patch_level = 0        # 如 20250301
-vendor_patch_level = 0
-boot_patch_level = 0
-keymaster_version = 0     # 如 300
-attestation_version = 0   # 如 300 (KeyMint1) / 400 (KeyMint2)
-security_level = 0        # 0=Software 1=TEE 2=StrongBox
+# DeviceInfo 字段。**auto 语义**：值为 0 或 -1 = 自动从系统 prop 读取真实值；
+# 值 >0 = 用户自定义（原样写入 attestation 扩展）。
+# 不填=等价 0=auto。建议保持 auto 让 attestation 与真机系统版本一致，避免可疑。
+android_version = 0       # auto ← ro.build.version.release（主版本号）
+os_version = 0            # auto ← ro.build.version.os_version / SDK 推算
+os_patch_level = 0        # auto ← ro.build.version.security_patch (YYYYMMDD)
+vendor_patch_level = 0    # auto ← ro.vendor.build.security_patch
+boot_patch_level = 0      # auto ← 回退到 security_patch（无独立 boot patch 属性）
+keymaster_version = 0     # auto ← certgen 兜底为 300（KeyMint1）。填 400=KeyMint2
+attestation_version = 0   # auto ← certgen 兜底为 300。填 400=KeyMint2 attestation
+security_level = 1        # 0=auto(certgen 兜底 TEE=1) 1=TEE 2=StrongBox。建议固定 1

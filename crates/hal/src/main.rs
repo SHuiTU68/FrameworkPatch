@@ -127,15 +127,47 @@ impl KeyMintProxy {
     }
 
     /// 构造 certgen DeviceInfo（从 hal.toml device 段 + 系统 prop 兜底）。
+    ///
+    /// **auto 语义**：`[device]` 段中值为 `0` 或 `-1` 的字段表示"自动获取"，
+    /// 运行时从系统属性读取真实值；值 `>0` 表示用户自定义，原样使用。
+    /// `security_level` 例外——它不被 auto 覆盖（0 时由 certgen 兜底为 TEE=1），
+    /// 因为 attestation 安全级别应反映伪造意图而非真机硬件。
     fn device_info(&self) -> DeviceInfo {
         let c = self.cfg.read();
         let d = &c.device;
         DeviceInfo {
-            android_version: d.android_version,
-            os_version: d.os_version,
-            os_patch_level: d.os_patch_level,
-            vendor_patch_level: d.vendor_patch_level,
-            boot_patch_level: d.boot_patch_level,
+            android_version: resolve_or(d.android_version, || {
+                getprop("ro.build.version.release")
+                    .and_then(|s| s.split('.').next().and_then(|n| n.parse::<i32>().ok()))
+                    .unwrap_or(0)
+            }),
+            os_version: resolve_or(d.os_version, || {
+                // 优先用 ro.build.version.os_version（部分设备有），否则按 SDK 推算。
+                getprop("ro.build.version.os_version")
+                    .and_then(|s| s.parse::<i32>().ok())
+                    .or_else(|| {
+                        getprop("ro.build.version.sdk")
+                            .and_then(|s| s.parse::<i32>().ok())
+                            .map(|sdk| {
+                                // Android 14=340000, 15=350000 等（AOSP 版本号规则）
+                                let major = sdk / 100;
+                                major * 10000 + sdk
+                            })
+                    })
+                    .unwrap_or(0)
+            }),
+            os_patch_level: resolve_or(d.os_patch_level, || {
+                parse_patch_date(getprop("ro.build.version.security_patch").as_deref())
+            }),
+            vendor_patch_level: resolve_or(d.vendor_patch_level, || {
+                parse_patch_date(getprop("ro.vendor.build.security_patch").as_deref())
+            }),
+            boot_patch_level: resolve_or(d.boot_patch_level, || {
+                // 无独立 boot patch 属性，回退到 security_patch
+                parse_patch_date(getprop("ro.build.version.security_patch").as_deref())
+            }),
+            // keymaster/attestation_version 保持 0 走 certgen 兜底（300），
+            // 用户填具体值则原样用。
             keymaster_version: d.keymaster_version,
             attestation_version: d.attestation_version,
             security_level: d.security_level,
@@ -370,6 +402,51 @@ fn load_keybox(path: &std::path::Path) -> Vec<u8> {
             log::warn!("fktee-hal: keybox 读取失败 ({}): {e}", path.display());
             Vec::new()
         }
+    }
+}
+
+/// 读取 Android 系统属性（`getprop`）。非 Android 环境返回 `None`。
+fn getprop(name: &str) -> Option<String> {
+    let output = std::process::Command::new("getprop")
+        .arg(name)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// `val > 0` → `val`（用户自定义）；否则（0 / -1 = auto）调用 `fallback` 取真实值。
+fn resolve_or(val: i32, fallback: impl FnOnce() -> i32) -> i32 {
+    if val > 0 {
+        val
+    } else {
+        let v = fallback();
+        if v == 0 {
+            // 真实值也读不到：patch_level 用 -1（attestation 扩展中-1=不报告），
+            // 其余字段保持 0 让 certgen 兜底。
+            -1
+        } else {
+            v
+        }
+    }
+}
+
+/// 把 `YYYY-MM-DD` 格式日期解析为 `YYYYMMDD` 整数（如 2025-03-01 → 20250301）。
+/// 输入为空或格式不符返回 0（调用方再走 -1 兜底）。
+fn parse_patch_date(s: Option<&str>) -> i32 {
+    let Some(s) = s else { return 0 };
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() >= 8 {
+        digits[..8].parse::<i32>().unwrap_or(0)
+    } else {
+        0
     }
 }
 

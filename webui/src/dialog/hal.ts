@@ -53,15 +53,16 @@ export class HalDialog {
           <md-outlined-text-field id="hal-deny_list_path" label="${i18n.t('hal_deny_list_path')}" autocapitalize="none"></md-outlined-text-field>
           <md-divider></md-divider>
           <div class="cfg-section-title">${i18n.t('hal_device')}</div>
+          <div class="hal-hint">${i18n.t('hal_device_auto_hint')}</div>
           ${DEVICE_FIELDS.map(f => {
             if (f === 'security_level') {
               return `<md-outlined-select id="hal-${f}" label="${i18n.t('hal_' + f)}" menu-positioning="popover" clamp-menu-width>
-                <md-select-option value="0"><div slot="headline">0 (Software)</div></md-select-option>
+                <md-select-option value="0"><div slot="headline">0 (auto → TEE)</div></md-select-option>
                 <md-select-option value="1"><div slot="headline">1 (TEE)</div></md-select-option>
                 <md-select-option value="2"><div slot="headline">2 (StrongBox)</div></md-select-option>
               </md-outlined-select>`
             }
-            return `<md-outlined-text-field id="hal-${f}" label="${i18n.t('hal_' + f)}" type="number" placeholder="0"></md-outlined-text-field>`
+            return `<md-outlined-text-field id="hal-${f}" label="${i18n.t('hal_' + f)}" type="number" placeholder="auto"></md-outlined-text-field>`
           }).join('\n')}
         </div>
         <div slot="actions">
@@ -120,10 +121,14 @@ export class HalDialog {
     for (const f of DEVICE_FIELDS) {
       if (f === 'security_level') {
         const el = this.#dialog?.querySelector<MdOutlinedSelect>(`#hal-${f}`)
-        const v = String(device[f] ?? '0')
-        if (el) el.value = SECURITY_LEVELS.includes(v) ? v : '0'
+        // 默认 1（TEE），与 hal.toml 默认一致
+        const v = String(device[f] ?? '1')
+        if (el) el.value = SECURITY_LEVELS.includes(v) ? v : '1'
       } else {
-        setText(`hal-${f}`, device[f] ?? '')
+        // 0 / -1 / 空 都显示为空（=auto 语义）
+        const raw = device[f]
+        const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? '0'), 10)
+        setText(`hal-${f}`, n > 0 ? n : '')
       }
     }
   }

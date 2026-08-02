@@ -147,6 +147,7 @@
     <string name="hal_keybox_path">Keybox path</string>
     <string name="hal_deny_list_path">Deny list path</string>
     <string name="hal_device">Device</string>
+    <string name="hal_device_auto_hint">Empty field = auto (read from system props). Filled value = custom override.</string>
     <string name="hal_android_version">Android version</string>
     <string name="hal_os_version">OS version</string>
     <string name="hal_os_patch_level">OS patch level</string>

@@ -113,23 +113,34 @@ fn default_forge_mode() -> ForgeMode {
 }
 
 /// DeviceInfo 默认值（对应 certgen::DeviceInfo）。
-/// 未填字段（0 / 空）由 certgen 用合理默认兜底。
+///
+/// **auto 语义**：值为 `0` 或 `-1` = 运行时自动从系统属性读取真实值；
+/// 值 `>0` = 用户自定义，原样使用。`security_level` 例外——不被 auto 覆盖，
+/// `0` 时由 certgen 兜底为 `1`（TEE）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeviceDefaults {
+    /// auto ← `ro.build.version.release`。填具体值如 `14` 则原样用。
     #[serde(default)]
     pub android_version: i32,
+    /// auto ← `ro.build.version.os_version` / SDK 推算。
     #[serde(default)]
     pub os_version: i32,
+    /// auto ← `ro.build.version.security_patch`（YYYYMMDD）。
     #[serde(default)]
     pub os_patch_level: i32,
+    /// auto ← `ro.vendor.build.security_patch`。
     #[serde(default)]
     pub vendor_patch_level: i32,
+    /// auto ← 回退到 security_patch（无独立 boot patch 属性）。
     #[serde(default)]
     pub boot_patch_level: i32,
+    /// auto ← certgen 兜底为 `300`（KeyMint1）。填 `400` = KeyMint2。
     #[serde(default)]
     pub keymaster_version: i32,
+    /// auto ← certgen 兜底为 `300`。填 `400` = KeyMint2 attestation。
     #[serde(default)]
     pub attestation_version: i32,
+    /// `0` = auto（certgen 兜底 TEE=1），`1` = TEE，`2` = StrongBox。建议固定 `1`。
     #[serde(default)]
     pub security_level: i32,
 }

@@ -147,6 +147,7 @@
     <string name="hal_keybox_path">Keybox 路径</string>
     <string name="hal_deny_list_path">Deny list 路径</string>
     <string name="hal_device">设备</string>
+    <string name="hal_device_auto_hint">留空 = auto（自动从系统属性读取）；填写数值 = 自定义覆盖</string>
     <string name="hal_android_version">Android 版本</string>
     <string name="hal_os_version">OS 版本</string>
     <string name="hal_os_patch_level">OS 补丁级别</string>
