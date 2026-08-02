@@ -380,7 +380,7 @@ fn find_got_entry(base: u64, sym_name: &str) -> Option<u64> {
         for i in 0..shnum {
             let shdr = &*((base as usize + shoff + i * shentsize) as *const Elf64_Shdr);
             let name_ptr = shstrtab + shdr.sh_name as usize;
-            let name = std::ffi::CStr::from_ptr(name_ptr as *const i8).to_str().unwrap_or("");
+            let name = std::ffi::CStr::from_ptr(name_ptr as *const _).to_str().unwrap_or("");
 
             match name {
                 ".rela.plt" => {
@@ -412,7 +412,7 @@ fn find_got_entry(base: u64, sym_name: &str) -> Option<u64> {
 
         for i in 1..sym_count {
             let sym = &*((dynsym_offset + i * sym_entsize) as *const Elf64_Sym);
-            let name_ptr = (dynstr_offset + sym.st_name as usize) as *const i8;
+            let name_ptr = (dynstr_offset + sym.st_name as usize) as *const _;
             let name = std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap_or("");
             if name == sym_name {
                 target_sym_idx = Some(i);
